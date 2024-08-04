@@ -3,134 +3,28 @@
 #include <assert.h>
 #include <iostream>
 #include <functional>
+#include "utils.h"
 
-uint8_t* LoadFile(const char* file_path) 
+TTFParser::TTFParser(const char* file_path) 
+	: m_FilePath(file_path), m_Data(nullptr), m_Encoding(nullptr)
 {
-	// Load font file into memory.
-	std::ifstream FileHandle(file_path, std::ios::binary);
-	if (!FileHandle.is_open()) {
-		return nullptr;
-	}
+	m_Data = LoadFile(m_FilePath.c_str());
 
-	FileHandle.seekg(0, FileHandle.end);
-	const auto FileByteSize = FileHandle.tellg();
-	FileHandle.seekg(0, FileHandle.beg);
+	check_supported();
+	
+	register_tables();
+	
+	// query em coordinate space info.
+	auto head = get_table("head");
+	m_UnitsPerEM = get_u16(head + 18);
+	std::cout << "UnitsPerEM: " << m_UnitsPerEM << std::endl;
 
-	char* Data = static_cast<char*>(malloc(FileByteSize));
-	FileHandle.read(Data, FileByteSize);
-	FileHandle.close();
-	assert(Data);
-
-	return (uint8_t*)Data;
+	select_encoding_scheme();
 }
 
-uint8_t get_u8(void* stream) {
-	uint8_t* ptrDataField = static_cast<uint8_t*>(stream);
-	uint8_t Bytes = *ptrDataField;
-	return Bytes;
-}
-int8_t get_s8(void* stream) {
-	int8_t* ptrDataField = static_cast<int8_t*>(stream);
-	int8_t Bytes = *ptrDataField;
-	return Bytes;
-}
-uint16_t get_u16(void* stream) {
-	uint16_t* ptrDataField = static_cast<uint16_t*>(stream);
-	uint16_t Bytes = *ptrDataField;
-
-#ifndef BIG_ENDIAN
-	uint16_t Val0 = (Bytes & 0xff) << 8;
-	uint16_t Val1 = (Bytes & 0xff00) >> 8;
-
-	Bytes = Val0 | Val1;
-#endif
-
-	return Bytes;
-}
-int16_t get_s16(void* stream) {
-	int16_t* ptrDataField = static_cast<int16_t*>(stream);
-	int16_t Bytes = *ptrDataField;
-
-#ifndef BIG_ENDIAN
-	int16_t Val0 = (Bytes & 0xff) << 8;
-	int16_t Val1 = (Bytes & 0xff00) >> 8;
-
-	Bytes = Val0 | Val1;
-#endif
-
-	return Bytes;
-}
-uint32_t get_u32(void* stream) {
-	uint32_t* ptrDataField = static_cast<uint32_t*>(stream);
-	uint32_t Bytes = *ptrDataField;
-
-#ifndef BIG_ENDIAN
-	uint32_t Val0 = (Bytes & 0xff) << 24;
-	uint32_t Val1 = (Bytes & 0xff00) << 8;
-	uint32_t Val2 = (Bytes & 0xff0000) >> 8;
-	uint32_t Val3 = (Bytes & 0xff000000) >> 24;
-
-	Bytes = Val0 | Val1 | Val2 | Val3;
-#endif
-
-	return Bytes;
-}
-int32_t get_s32(void* stream) {
-	int32_t* ptrDataField = static_cast<int32_t*>(stream);
-	int32_t Bytes = *ptrDataField;
-
-#ifndef BIG_ENDIAN
-	int32_t Val0 = (Bytes & 0xff) << 24;
-	int32_t Val1 = (Bytes & 0xff00) << 8;
-	int32_t Val2 = (Bytes & 0xff0000) >> 8;
-	int32_t Val3 = (Bytes & 0xff000000) >> 24;
-
-	Bytes = Val0 | Val1 | Val2 | Val3;
-#endif
-
-	return Bytes;
-}
-uint64_t get_u64(void* stream) {
-	uint64_t* ptrDataField = static_cast<uint64_t*>(stream);
-	uint64_t Bytes = *ptrDataField;
-
-#ifndef BIG_ENDIAN
-	uint64_t Val0 = (Bytes & 0xff) << 56;
-	uint64_t Val1 = (Bytes & 0xff00) << 40;
-	uint64_t Val2 = (Bytes & 0xff0000) >> 24;
-	uint64_t Val3 = (Bytes & 0xff000000) << 8;
-	uint64_t Val4 = (Bytes & 0xff00000000) >> 8;
-	uint64_t Val5 = (Bytes & 0xff0000000000) >> 24;
-	uint64_t Val6 = (Bytes & 0xff000000000000) >> 40;
-	uint64_t Val7 = (Bytes & 0xff00000000000000) >> 56;
-
-	Bytes = Val0 | Val1 | Val2 | Val3 | Val4 | Val5 | Val6 | Val7;
-#endif
-
-	return Bytes;
-}
-int64_t get_s64(void* stream) {
-	int64_t* ptrDataField = static_cast<int64_t*>(stream);
-	int64_t Bytes = *ptrDataField;
-
-#ifndef BIG_ENDIAN
-	int64_t Val0 = (Bytes & 0xff) << 56;
-	int64_t Val1 = (Bytes & 0xff00) << 40;
-	int64_t Val2 = (Bytes & 0xff0000) >> 24;
-	int64_t Val3 = (Bytes & 0xff000000) << 8;
-	int64_t Val4 = (Bytes & 0xff00000000) >> 8;
-	int64_t Val5 = (Bytes & 0xff0000000000) >> 24;
-	int64_t Val6 = (Bytes & 0xff000000000000) >> 40;
-	int64_t Val7 = (Bytes & 0xff00000000000000) >> 56;
-
-	Bytes = Val0 | Val1 | Val2 | Val3 | Val4 | Val5 | Val6 | Val7;
-#endif
-
-	return Bytes;
-}
-
-void TTFParser::check_supported() {
-	auto OutlineType = get_u32(m_Data);
+void TTFParser::check_supported()
+{
+    auto OutlineType = get_u32(m_Data);
 	assert(OutlineType == 0x00010000 || OutlineType == 0x74727565); // only support ttf outlines.
 }
 
@@ -203,7 +97,7 @@ std::vector<int16_t>* parse_coordinate_data(const std::vector<uint8_t>& flags,
 	return buff;
 }
 
-void TTFParser::parse_outline(int cp) {
+Outline TTFParser::parse_outline(int cp) {
 	auto glyph_index = m_Encoding->get_glyph_index(cp);
 
 	// Find the location of the outline data.
@@ -227,6 +121,14 @@ void TTFParser::parse_outline(int cp) {
 	// Parse the point data.
 	auto contour_count = get_s16(outline);
 	assert(contour_count > 0); // only support simple outline atm!
+
+	auto xMin = get_s16(outline + 2); 
+	auto yMin = get_s16(outline + 4); 
+	auto xMax = get_s16(outline + 6); 
+	auto yMax = get_s16(outline + 8); 
+
+	auto width = xMax - xMin;
+	auto height = yMax - yMin;
 
 	uint8_t* contour_data = outline + 10;
 	auto* point_map_end = (uint16_t*)contour_data + (contour_count - 1);
@@ -257,19 +159,41 @@ void TTFParser::parse_outline(int cp) {
 		points.emplace_back(xc_buff->at(k), yc_buff->at(k), flags[k] & 1);
 	}
 
-	int x = 100;
+	return {points, width, height, xMin, yMin};
 }
 
-TTFParser::TTFParser(const char* file_path) 
-	: m_FilePath(file_path), m_Data(nullptr), m_Encoding(nullptr)
+float TTFParser::toPixels(int16_t em, float pts, float dpi) {
+	return (em / (float)m_UnitsPerEM) * pts * dpi;
+}
+
+void PutPixel(int x, int y, char val, void* pixels, int stride) 
 {
-	m_Data = LoadFile(m_FilePath.c_str());
+	 uint8_t* pixel = (uint8_t*)pixels + y*stride + x;
+	 *pixel = val;
+} 
 
-	check_supported();
-	
-	register_tables();
-	
-	select_encoding_scheme();
+RenderResult TTFParser::Rasterize(int cp)
+{
+	std::cout << "Codepoint: " << cp << std::endl;
+	auto outline = parse_outline(cp);
 
-	parse_outline('A');
+	// allocate bitmap memory.
+	size_t bmpWidth = std::ceil(toPixels(outline.width));
+	size_t bmpHeight = std::ceil(toPixels(outline.height));
+	char* pixels = (char*)malloc(bmpWidth * bmpHeight);
+	memset(pixels, 0, bmpWidth*bmpHeight);
+	std::cout << "Bitmap: " << bmpWidth << "x" << bmpHeight << " pixels" << std::endl;
+
+	// apply transformation to points (em -> bitmap space).
+	for(auto& pt: outline.points) {
+		pt.xc -= outline.xMin;
+		pt.yc -= outline.yMin;
+
+		pt.xc = toPixels(pt.xc);
+		pt.yc = toPixels(pt.yc);
+
+		PutPixel(pt.xc, pt.yc, 0xff, pixels, bmpWidth);
+	}
+
+    return {pixels, bmpWidth, bmpHeight};
 }
