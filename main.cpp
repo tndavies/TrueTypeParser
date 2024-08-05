@@ -7,13 +7,13 @@
 
 int main(int argc, char* argv[]) 
 {
-	if (argc < 2) {
-		std::cout << "Error: No Truetype font file was specified!";
+	if (argc < 3) {
+		std::cout << "Error: Invalid inputs!";
 		return -1;
 	}
 
 	TTFParser ttf(argv[1]);
-	auto render = ttf.Rasterize('A');
+	auto render = ttf.Rasterize(*argv[2]);
 
 	auto x = stbi_write_bmp("letter.bmp", render.width, render.height, 1, render.bitmap);
 	std::cout << "STBI: " << (x ? "Ok" : "Failure") << std::endl;

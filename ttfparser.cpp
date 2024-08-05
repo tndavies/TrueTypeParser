@@ -172,6 +172,50 @@ void PutPixel(int x, int y, char val, void* pixels, int stride)
 	 *pixel = val;
 } 
 
+struct Edge {
+	virtual bool intersects(int hline) const = 0;
+	virtual std::string repr() const = 0;
+};
+
+class Line : public Edge {
+public:
+	Line(Point p0, Point p1)
+		: m_Start(p0), m_End(p1) {}
+
+	bool intersects(int hline) const override 
+	{
+		return false;
+	}
+
+	std::string repr() const override 
+	{
+		return "line";
+	}
+
+private:
+	Point m_Start, m_End;
+};
+
+class Bezier : public Edge {
+public:
+	Bezier(Point p0, Point p1, Point p2)
+		: m_Start(p0), m_Control(p1), m_End(p2) {}
+
+	bool intersects(int hline) const override 
+	{
+		return false;
+	}
+
+	std::string repr() const override 
+	{
+		return "bezier";
+	}
+
+private:
+	Point m_Start, m_Control, m_End;
+};
+
+
 RenderResult TTFParser::Rasterize(int cp)
 {
 	std::cout << "Codepoint: " << cp << std::endl;
@@ -181,18 +225,71 @@ RenderResult TTFParser::Rasterize(int cp)
 	size_t bmpWidth = std::ceil(toPixels(outline.width));
 	size_t bmpHeight = std::ceil(toPixels(outline.height));
 	char* pixels = (char*)malloc(bmpWidth * bmpHeight);
-	memset(pixels, 0, bmpWidth*bmpHeight);
+	memset(pixels, 0x00, bmpWidth*bmpHeight);
 	std::cout << "Bitmap: " << bmpWidth << "x" << bmpHeight << " pixels" << std::endl;
 
-	// apply transformation to points (em -> bitmap space).
-	for(auto& pt: outline.points) {
-		pt.xc -= outline.xMin;
-		pt.yc -= outline.yMin;
+	// Build edge list.
+	std::vector<Edge*> edge_list;
 
-		pt.xc = toPixels(pt.xc);
-		pt.yc = toPixels(pt.yc);
+	std::cout << "\nPoint Data: \n" << std::endl;
+	uint8_t bits = 0, j = 0;
+	for(size_t k = 0; k < outline.points.size(); k++) {
+		auto& pt = outline.points[k];
+		std::cout << (pt.on_curve ? "on" : "off") << std::endl;
 
+		pt.xc = toPixels(pt.xc - outline.xMin);
+		pt.yc = toPixels(pt.yc - outline.yMin);
 		PutPixel(pt.xc, pt.yc, 0xff, pixels, bmpWidth);
+
+		bits |= pt.on_curve ? (1 << j++) : 0;
+		switch(bits) {
+			case 0b011: // on, on
+			{
+				Line* edge = new Line(outline.points[k-1], pt);
+				edge_list.push_back(edge);
+
+				bits = 0;
+				j = 0;
+			}
+			break;
+
+			case 0b101: // on, off, on
+			{
+				Bezier* edge = new Bezier(outline.points[k-2], outline.points[k-1], pt);
+				edge_list.push_back(edge);
+
+				bits = 0;
+				j = 0;
+			}
+			break;
+
+			case 0b1001: // on, off, off, on --> // on, off, on, off, on
+			{
+				float ix = 0.5f*(outline.points[k-2].xc + outline.points[k-1].xc); 
+				float iy = 0.5f*(outline.points[k-2].yc + outline.points[k-1].yc); 
+				Point ipt(ix, iy, NULL);
+
+				Bezier* edge1 = new Bezier(outline.points[k-3], outline.points[k-2], ipt); 
+				Bezier* edge2 = new Bezier(ipt, outline.points[k-1], pt); 
+			
+				edge_list.push_back(edge1);
+				edge_list.push_back(edge2);
+				
+				bits = 0;
+				j = 0;
+			}
+			break;
+		}
+	}
+
+	// Scanline rasterizer.
+	const int scl = 20.0f;
+	for(int x = 0; x <= bmpWidth; x++) PutPixel(x, scl, 0xff, pixels, bmpWidth); // debug line
+	
+	// debug output.
+	std::cout << "Edges:\n";
+	for(const auto& edge : edge_list) {
+		std::cout << edge->repr() << std::endl;
 	}
 
     return {pixels, bmpWidth, bmpHeight};
