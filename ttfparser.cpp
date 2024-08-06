@@ -4,6 +4,8 @@
 #include <iostream>
 #include <functional>
 #include "utils.h"
+#include <array>
+#include <algorithm>
 
 TTFParser::TTFParser(const char* file_path) 
 	: m_FilePath(file_path), m_Data(nullptr), m_Encoding(nullptr)
@@ -158,12 +160,27 @@ Outline TTFParser::parse_outline(int cp) {
 	for (size_t k = 0; k < flags.size(); k++) {
 		points.emplace_back(xc_buff->at(k), yc_buff->at(k), flags[k] & 1);
 	}
+	points.push_back(points.front());
 
-	return {points, width, height, xMin, yMin};
+	// Build edge list.
+	std::vector<Line> edges;
+	for (size_t k = 0; k < points.size(); k++) {
+		auto& pt = points[k];
+		assert(pt.on_curve);
+
+		pt.xc -= xMin;
+		pt.yc -= yMin;
+
+		if (k == 0) continue;
+
+		edges.emplace_back(points[k - 1], pt, m_UnitsPerEM);
+	}
+
+	return {edges, width, height};
 }
 
-float TTFParser::toPixels(int16_t em, float pts, float dpi) {
-	return (em / (float)m_UnitsPerEM) * pts * dpi;
+float toPixels(int16_t em, float upem, float pts = 12.0f, float dpi = 96.0f) {
+	return (em / upem) * pts * dpi;
 }
 
 void PutPixel(int x, int y, char val, void* pixels, int stride) 
@@ -172,125 +189,102 @@ void PutPixel(int x, int y, char val, void* pixels, int stride)
 	 *pixel = val;
 } 
 
-struct Edge {
-	virtual bool intersects(int hline) const = 0;
-	virtual std::string repr() const = 0;
-};
+#include <glm/glm.hpp>
 
-class Line : public Edge {
-public:
-	Line(Point p0, Point p1)
-		: m_Start(p0), m_End(p1) {}
-
-	bool intersects(int hline) const override 
-	{
-		return false;
-	}
-
-	std::string repr() const override 
-	{
-		return "line";
-	}
-
-private:
-	Point m_Start, m_End;
-};
-
-class Bezier : public Edge {
-public:
-	Bezier(Point p0, Point p1, Point p2)
-		: m_Start(p0), m_Control(p1), m_End(p2) {}
-
-	bool intersects(int hline) const override 
-	{
-		return false;
-	}
-
-	std::string repr() const override 
-	{
-		return "bezier";
-	}
-
-private:
-	Point m_Start, m_Control, m_End;
-};
-
+template <typename T>
+bool InRange(T x, T x0, T x1) {
+	std::array<T, 2> range = { x0, x1 };
+	std::sort(range.begin(), range.end());
+	
+	return x >= range[0] && x <= range[1];
+}
 
 RenderResult TTFParser::Rasterize(int cp)
 {
 	std::cout << "Codepoint: " << cp << std::endl;
 	auto outline = parse_outline(cp);
 
-	// allocate bitmap memory.
-	size_t bmpWidth = std::ceil(toPixels(outline.width));
-	size_t bmpHeight = std::ceil(toPixels(outline.height));
+	// Allocate bitmap.
+	size_t bmpWidth = std::ceil(toPixels(outline.width, m_UnitsPerEM));
+	size_t bmpHeight = std::ceil(toPixels(outline.height, m_UnitsPerEM));
 	char* pixels = (char*)malloc(bmpWidth * bmpHeight);
-	memset(pixels, 0x00, bmpWidth*bmpHeight);
+	memset(pixels, 0x00, bmpWidth * bmpHeight);
 	std::cout << "Bitmap: " << bmpWidth << "x" << bmpHeight << " pixels" << std::endl;
 
-	// Build edge list.
-	std::vector<Edge*> edge_list;
+	// Rasterize.
+	for (float scl = 0.0f; scl <= bmpHeight; scl++)
+	{
+		std::vector<float> ixs;
 
-	std::cout << "\nPoint Data: \n" << std::endl;
-	uint8_t bits = 0, j = 0;
-	for(size_t k = 0; k < outline.points.size(); k++) {
-		auto& pt = outline.points[k];
-		std::cout << (pt.on_curve ? "on" : "off") << std::endl;
+		for (const auto& edge : outline.edges) {
+			edge.getIntersections(scl, ixs);
+		}
 
-		pt.xc = toPixels(pt.xc - outline.xMin);
-		pt.yc = toPixels(pt.yc - outline.yMin);
-		PutPixel(pt.xc, pt.yc, 0xff, pixels, bmpWidth);
+		std::sort(ixs.begin(), ixs.end());
 
-		bits |= pt.on_curve ? (1 << j++) : 0;
-		switch(bits) {
-			case 0b011: // on, on
-			{
-				Line* edge = new Line(outline.points[k-1], pt);
-				edge_list.push_back(edge);
-
-				bits = 0;
-				j = 0;
-			}
-			break;
-
-			case 0b101: // on, off, on
-			{
-				Bezier* edge = new Bezier(outline.points[k-2], outline.points[k-1], pt);
-				edge_list.push_back(edge);
-
-				bits = 0;
-				j = 0;
-			}
-			break;
-
-			case 0b1001: // on, off, off, on --> // on, off, on, off, on
-			{
-				float ix = 0.5f*(outline.points[k-2].xc + outline.points[k-1].xc); 
-				float iy = 0.5f*(outline.points[k-2].yc + outline.points[k-1].yc); 
-				Point ipt(ix, iy, NULL);
-
-				Bezier* edge1 = new Bezier(outline.points[k-3], outline.points[k-2], ipt); 
-				Bezier* edge2 = new Bezier(ipt, outline.points[k-1], pt); 
-			
-				edge_list.push_back(edge1);
-				edge_list.push_back(edge2);
-				
-				bits = 0;
-				j = 0;
-			}
-			break;
+		for (size_t k = 0; k < ixs.size(); k++) {
+			PutPixel(ixs[k], scl, 0xff, pixels, bmpWidth);
 		}
 	}
 
-	// Scanline rasterizer.
-	const int scl = 20.0f;
-	for(int x = 0; x <= bmpWidth; x++) PutPixel(x, scl, 0xff, pixels, bmpWidth); // debug line
-	
-	// debug output.
-	std::cout << "Edges:\n";
-	for(const auto& edge : edge_list) {
-		std::cout << edge->repr() << std::endl;
-	}
+    return { pixels, bmpWidth, bmpHeight};
+}
 
-    return {pixels, bmpWidth, bmpHeight};
+void Line::getIntersections(float scanline, std::vector<float>& ixs) const
+{
+	switch (m_Type) {
+	case Type::Horizontal:
+	{
+		if (scanline == m_P0.yc) {
+			ixs.push_back(m_P0.xc);
+			ixs.push_back(m_P1.xc);
+		}
+	}
+	break;
+
+	case Type::Vertical:
+	{
+		if (InRange<int16_t>(scanline, m_P0.yc, m_P1.yc)) {
+			ixs.push_back(m_P0.xc);
+		}
+	}
+	break;
+
+	case Type::Slanted:
+	{
+		float ix = (scanline - m_Intercept) / m_Gradient;
+		if (InRange<int16_t>(ix, m_P0.xc, m_P1.xc)) {
+			ixs.push_back(ix);
+		}
+	}
+	break;
+	}
+}
+
+void Line::Categorize(float upem) {
+	// Convert coordinates from em-space -> bitmap-space.
+	Point p0 = m_P0, p1 = m_P1;
+	m_P0.xc = toPixels(m_P0.xc, upem);
+	m_P0.yc = toPixels(m_P0.yc, upem);
+	m_P1.xc = toPixels(m_P1.xc, upem);
+	m_P1.yc = toPixels(m_P1.yc, upem);
+
+	// Categorise line type (done in em-space to avoid fp precision errors).
+	if (p0.xc == p1.xc) {
+		m_Type = Type::Vertical;
+	}
+	else if (p0.yc == p1.yc) {
+		m_Type = Type::Horizontal;
+	}
+	else {
+		m_Type = Type::Slanted;
+
+		float x0 = static_cast<float>(m_P0.xc);
+		float x1 = static_cast<float>(m_P1.xc);
+		float y0 = static_cast<float>(m_P0.yc);
+		float y1 = static_cast<float>(m_P1.yc);
+
+		m_Gradient = (y1 - y0) / (x1 - x0);
+		m_Intercept = y0 - m_Gradient * x0;
+	}
 }

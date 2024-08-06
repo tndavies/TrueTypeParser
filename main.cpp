@@ -17,4 +17,6 @@ int main(int argc, char* argv[])
 
 	auto x = stbi_write_bmp("letter.bmp", render.width, render.height, 1, render.bitmap);
 	std::cout << "STBI: " << (x ? "Ok" : "Failure") << std::endl;
+
+	getchar();
 }

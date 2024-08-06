@@ -17,10 +17,35 @@ struct Point {
 	bool on_curve;
 };
 
+
+class Line {
+public:
+	// note: coordinates should be in font-unit space.
+	Line(Point p0, Point p1, float upem)
+		: m_P0(p0), m_P1(p1), m_Intercept(0), m_Gradient(0)
+	{
+		assert(!((p0.xc == p1.xc) && (p0.yc == p1.yc))); // Ensure p0 != p1
+
+		this->Categorize(upem);
+	}
+
+	void getIntersections(float scanline, std::vector<float>& ixs) const;
+
+private:
+	void Categorize(float upem);
+
+private:
+	Point m_P0, m_P1;
+	float m_Intercept, m_Gradient;
+
+	enum class Type {
+		Vertical, Horizontal, Slanted
+	} m_Type;
+};
+
 struct Outline {
-	std::vector<Point> points;
+	std::vector<Line> edges;
 	int width, height;
-	int16_t xMin, yMin;
 };
 
 struct ICodepointMap 
@@ -57,7 +82,6 @@ public:
 	void register_tables();
 	void select_encoding_scheme();
 	Outline parse_outline(int cp);
-	float toPixels(int16_t em, float pts = 12.0f, float dpi = 96.0f);
 
 private:
 	std::unordered_map<std::string, uint32_t> m_Tables;
