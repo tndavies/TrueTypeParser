@@ -7,16 +7,14 @@
 
 int main(int argc, char* argv[]) 
 {
-	if (argc < 3) {
-		std::cout << "Error: Invalid inputs!";
-		return -1;
-	}
+	//if (argc < 3) {
+	//	std::cout << "Error: Invalid inputs!";
+	//	return -1;
+	//}
 
 	TTFParser ttf(argv[1]);
-	auto render = ttf.Rasterize(*argv[2]);
+	auto bitmap = ttf.Rasterize('>');
 
-	auto x = stbi_write_bmp("letter.bmp", render.width, render.height, 1, render.bitmap);
-	std::cout << "STBI: " << (x ? "Ok" : "Failure") << std::endl;
-
-	getchar();
+	auto x = stbi_write_bmp("letter.bmp", bitmap.width, bitmap.height, 1, bitmap.memory);
+	std::cout << (x ? "Finished." : "Encountered Error!") << std::endl;
 }

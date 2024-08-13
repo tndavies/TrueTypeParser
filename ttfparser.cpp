@@ -99,7 +99,7 @@ std::vector<int16_t>* parse_coordinate_data(const std::vector<uint8_t>& flags,
 	return buff;
 }
 
-Outline TTFParser::parse_outline(int cp) {
+Outline_Descriptor TTFParser::ExtractOutline(int cp) {
 	auto glyph_index = m_Encoding->get_glyph_index(cp);
 
 	// Find the location of the outline data.
@@ -129,8 +129,8 @@ Outline TTFParser::parse_outline(int cp) {
 	auto xMax = get_s16(outline + 6); 
 	auto yMax = get_s16(outline + 8); 
 
-	auto width = xMax - xMin;
-	auto height = yMax - yMin;
+	auto x_extent = xMax - xMin;
+	auto y_extent = yMax - yMin;
 
 	uint8_t* contour_data = outline + 10;
 	auto* point_map_end = (uint16_t*)contour_data + (contour_count - 1);
@@ -156,135 +156,122 @@ Outline TTFParser::parse_outline(int cp) {
 	std::vector<int16_t>* xc_buff = parse_coordinate_data(flags, &stream, 1, 4);
 	std::vector<int16_t>* yc_buff = parse_coordinate_data(flags, &stream, 2, 5);
 
+	// Build points list.
 	std::vector<Point> points;
 	for (size_t k = 0; k < flags.size(); k++) {
-		points.emplace_back(xc_buff->at(k), yc_buff->at(k), flags[k] & 1);
+		points.emplace_back(xc_buff->at(k) - xMin, yc_buff->at(k) - yMin, flags[k] & 1);
 	}
 	points.push_back(points.front());
 
-	// Build edge list.
-	std::vector<Line> edges;
-	for (size_t k = 0; k < points.size(); k++) {
-		auto& pt = points[k];
-		assert(pt.on_curve);
-
-		pt.xc -= xMin;
-		pt.yc -= yMin;
-
-		if (k == 0) continue;
-
-		edges.emplace_back(points[k - 1], pt, m_UnitsPerEM);
-	}
-
-	return {edges, width, height};
+	return {points, x_extent, y_extent};
 }
 
 float toPixels(int16_t em, float upem, float pts = 12.0f, float dpi = 96.0f) {
 	return (em / upem) * pts * dpi;
 }
 
-void PutPixel(int x, int y, char val, void* pixels, int stride) 
+void PutPixel(int x, int y, char val, void* pixels, int stride)
 {
-	 uint8_t* pixel = (uint8_t*)pixels + y*stride + x;
-	 *pixel = val;
-} 
-
-#include <glm/glm.hpp>
-
-template <typename T>
-bool InRange(T x, T x0, T x1) {
-	std::array<T, 2> range = { x0, x1 };
-	std::sort(range.begin(), range.end());
-	
-	return x >= range[0] && x <= range[1];
+	uint8_t* pixel = (uint8_t*)pixels + y * stride + x;
+	*pixel = val;
 }
 
-RenderResult TTFParser::Rasterize(int cp)
-{
-	std::cout << "Codepoint: " << cp << std::endl;
-	auto outline = parse_outline(cp);
 
-	// Allocate bitmap.
-	size_t bmpWidth = std::ceil(toPixels(outline.width, m_UnitsPerEM));
-	size_t bmpHeight = std::ceil(toPixels(outline.height, m_UnitsPerEM));
-	char* pixels = (char*)malloc(bmpWidth * bmpHeight);
-	memset(pixels, 0x00, bmpWidth * bmpHeight);
-	std::cout << "Bitmap: " << bmpWidth << "x" << bmpHeight << " pixels" << std::endl;
+/////////////////////////////////////////////////////////////////////////////////////
 
-	// Rasterize.
-	for (float scl = 0.0f; scl <= bmpHeight; scl++)
-	{
-		std::vector<float> ixs;
+typedef int16_t FontUnit;
 
-		for (const auto& edge : outline.edges) {
-			edge.getIntersections(scl, ixs);
-		}
+struct Edge {
+	FontUnit x0, y0;
+	FontUnit x1, y1;
 
-		std::sort(ixs.begin(), ixs.end());
+	Edge(FontUnit x0, FontUnit y0, FontUnit x1, FontUnit y1)
+		: x0(x0), y0(y0), x1(x1), y1(y1)
+	{}
+};
 
-		for (size_t k = 0; k < ixs.size(); k++) {
-			PutPixel(ixs[k], scl, 0xff, pixels, bmpWidth);
-		}
+std::vector<Edge> build_edge_table(std::vector<Point> points) {
+	std::vector<Edge> edge_table;
+
+	for (size_t k = 1; k < points.size(); k++) {
+		const auto& pt1 = points[k];
+		const auto& pt0 = points[k - 1];
+
+		if (pt0.yc == pt1.yc) continue; // skip horizontal edge.
+
+		edge_table.emplace_back(pt0.xc, pt0.yc, pt1.xc, pt1.yc);
 	}
 
-    return { pixels, bmpWidth, bmpHeight};
+	assert(edge_table.size());
+
+	return edge_table;
 }
 
-void Line::getIntersections(float scanline, std::vector<float>& ixs) const
-{
-	switch (m_Type) {
-	case Type::Horizontal:
-	{
-		if (scanline == m_P0.yc) {
-			ixs.push_back(m_P0.xc);
-			ixs.push_back(m_P1.xc);
-		}
-	}
-	break;
+Bitmap TTFParser::allocate_bitmap(const Outline_Descriptor& outline) {
+	size_t bitmap_width = toPixels(outline.x_extent, m_UnitsPerEM);
+	size_t bitmap_height = toPixels(outline.y_extent, m_UnitsPerEM);
 
-	case Type::Vertical:
-	{
-		if (InRange<int16_t>(scanline, m_P0.yc, m_P1.yc)) {
-			ixs.push_back(m_P0.xc);
-		}
-	}
-	break;
+	size_t bytes = bitmap_width * bitmap_height;
+	void* memory = malloc(bytes);
+	assert(memory);
 
-	case Type::Slanted:
-	{
-		float ix = (scanline - m_Intercept) / m_Gradient;
-		if (InRange<int16_t>(ix, m_P0.xc, m_P1.xc)) {
-			ixs.push_back(ix);
-		}
-	}
-	break;
+	std::memset(memory, 0, bytes);
+
+	return Bitmap(memory, bitmap_width, bitmap_height);
+}
+
+void fill_span(float x0, float x1, float y, const Bitmap& bitmap) {
+	// @todo: how should we cast from float here?
+	for (int px = (int)x0; px <= (int)x1; px++) {
+		PutPixel(px, y, 0xff, bitmap.memory, bitmap.width);
 	}
 }
 
-void Line::Categorize(float upem) {
-	// Convert coordinates from em-space -> bitmap-space.
-	Point p0 = m_P0, p1 = m_P1;
-	m_P0.xc = toPixels(m_P0.xc, upem);
-	m_P0.yc = toPixels(m_P0.yc, upem);
-	m_P1.xc = toPixels(m_P1.xc, upem);
-	m_P1.yc = toPixels(m_P1.yc, upem);
+Bitmap TTFParser::Rasterize(int codepoint) {
+	// Extract outline information
+	auto outline_desc = ExtractOutline(codepoint);
 
-	// Categorise line type (done in em-space to avoid fp precision errors).
-	if (p0.xc == p1.xc) {
-		m_Type = Type::Vertical;
-	}
-	else if (p0.yc == p1.yc) {
-		m_Type = Type::Horizontal;
-	}
-	else {
-		m_Type = Type::Slanted;
+	// Construct edge table. 
+	auto edge_table = build_edge_table(outline_desc.points);
 
-		float x0 = static_cast<float>(m_P0.xc);
-		float x1 = static_cast<float>(m_P1.xc);
-		float y0 = static_cast<float>(m_P0.yc);
-		float y1 = static_cast<float>(m_P1.yc);
+	// Allocate bitmap memory.
+	Bitmap bitmap = allocate_bitmap(outline_desc);
 
-		m_Gradient = (y1 - y0) / (x1 - x0);
-		m_Intercept = y0 - m_Gradient * x0;
+	// Rasterise outline.
+	for (float scanline = 0.0f; scanline < bitmap.height; scanline++)
+	{
+		// find scanline intersections.
+		std::vector<float> hit_list;
+		for (const auto& e : edge_table) {
+			auto yMin = toPixels(std::min(e.y0, e.y1), m_UnitsPerEM);
+			auto yMax = toPixels(std::max(e.y0, e.y1), m_UnitsPerEM);
+			
+			auto x0 = toPixels(e.x0, m_UnitsPerEM);
+			auto y1 = toPixels(e.y1, m_UnitsPerEM);
+			auto x1 = toPixels(e.x1, m_UnitsPerEM);
+			auto y0 = toPixels(e.y0, m_UnitsPerEM);
+
+			if (scanline >= yMin && scanline <= yMax) {
+				if (e.x0 != e.x1) { // slanted line
+					float gradient = float(y1 - y0) / (x1 - x0);
+					float intercept = y0 - gradient * x0;
+					hit_list.push_back( (scanline - intercept) / gradient );
+				}
+				else { // vertical line
+					hit_list.push_back(x0);
+				}
+			}
+		}
+
+		// fill in the predetermined spans.
+		assert(hit_list.size() % 2 == 0);
+
+		std::sort(hit_list.begin(), hit_list.end());
+
+		for (size_t k = 1; k < hit_list.size(); k+=2) {
+			fill_span(hit_list[k - 1], hit_list[k], scanline, bitmap);
+		}
 	}
+
+	return bitmap;
 }
