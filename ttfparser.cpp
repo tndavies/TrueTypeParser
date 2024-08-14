@@ -208,8 +208,8 @@ std::vector<Edge> build_edge_table(std::vector<Point> points) {
 }
 
 Bitmap TTFParser::allocate_bitmap(const Outline_Descriptor& outline) {
-	size_t bitmap_width = toPixels(outline.x_extent, m_UnitsPerEM);
-	size_t bitmap_height = toPixels(outline.y_extent, m_UnitsPerEM);
+	size_t bitmap_width = std::ceil(toPixels(outline.x_extent, m_UnitsPerEM));
+	size_t bitmap_height = std::ceil(toPixels(outline.y_extent, m_UnitsPerEM));
 
 	size_t bytes = bitmap_width * bitmap_height;
 	void* memory = malloc(bytes);
@@ -227,7 +227,7 @@ void fill_span(float x0, float x1, float y, const Bitmap& bitmap) {
 	}
 }
 
-Bitmap TTFParser::Rasterize(int codepoint) {
+Bitmap TTFParser::RasterizeGlyph(int codepoint) {
 	// Extract outline information
 	auto outline_desc = ExtractOutline(codepoint);
 

@@ -54,7 +54,7 @@ public:
 		return m_Data + m_Tables.at(tag);
 	}
 
-	Bitmap Rasterize(int cp);
+	Bitmap RasterizeGlyph(int cp);
 
 	void check_supported();
 	void register_tables();

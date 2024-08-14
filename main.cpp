@@ -13,8 +13,8 @@ int main(int argc, char* argv[])
 	//}
 
 	TTFParser ttf(argv[1]);
-	auto bitmap = ttf.Rasterize('>');
+	auto bitmap = ttf.RasterizeGlyph('>');
 
 	auto x = stbi_write_bmp("letter.bmp", bitmap.width, bitmap.height, 1, bitmap.memory);
-	std::cout << (x ? "Finished." : "Encountered Error!") << std::endl;
+	assert(x);
 }
