@@ -13,7 +13,7 @@ int main(int argc, char* argv[])
 	//}
 
 	TTFParser ttf(argv[1]);
-	auto bitmap = ttf.RasterizeGlyph('>');
+	auto bitmap = ttf.RasterizeGlyph(0);
 
 	auto x = stbi_write_bmp("letter.bmp", bitmap.width, bitmap.height, 1, bitmap.memory);
 	assert(x);

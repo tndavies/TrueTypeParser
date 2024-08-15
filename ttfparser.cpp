@@ -6,6 +6,7 @@
 #include "utils.h"
 #include <array>
 #include <algorithm>
+#include <list>
 
 TTFParser::TTFParser(const char* file_path) 
 	: m_FilePath(file_path), m_Data(nullptr), m_Encoding(nullptr)
@@ -182,11 +183,11 @@ void PutPixel(int x, int y, char val, void* pixels, int stride)
 typedef int16_t FontUnit;
 
 struct Edge {
-	FontUnit x0, y0;
-	FontUnit x1, y1;
+	Point p0, p1;
+	bool is_dirty;
 
 	Edge(FontUnit x0, FontUnit y0, FontUnit x1, FontUnit y1)
-		: x0(x0), y0(y0), x1(x1), y1(y1)
+		: p0(x0, y0, true), p1(x1, y1, true), is_dirty(false)
 	{}
 };
 
@@ -228,8 +229,18 @@ void fill_span(float x0, float x1, float y, const Bitmap& bitmap) {
 }
 
 Bitmap TTFParser::RasterizeGlyph(int codepoint) {
+	//codepoint = '>';
+
 	// Extract outline information
-	auto outline_desc = ExtractOutline(codepoint);
+	//auto outline_desc = ExtractOutline(codepoint);
+	
+	std::vector<Point> debug_pts = {
+		{400,200, true},
+		{900,600, true},
+		{200,800, true},
+		{400, 200, true}
+	};
+	Outline_Descriptor outline_desc = { .points = debug_pts, .x_extent = 1000, .y_extent = 1000 };
 
 	// Construct edge table. 
 	auto edge_table = build_edge_table(outline_desc.points);
@@ -237,30 +248,69 @@ Bitmap TTFParser::RasterizeGlyph(int codepoint) {
 	// Allocate bitmap memory.
 	Bitmap bitmap = allocate_bitmap(outline_desc);
 
+	auto xx = toPixels(600, m_UnitsPerEM);
+
 	// Rasterise outline.
-	for (float scanline = 0.0f; scanline < bitmap.height; scanline++)
+	const float scanline_resolution = 0.5f;
+	for (float scanline = 0.0f; scanline < bitmap.height; scanline+=scanline_resolution)
 	{
 		// find scanline intersections.
 		std::vector<float> hit_list;
-		for (const auto& e : edge_table) {
-			auto yMin = toPixels(std::min(e.y0, e.y1), m_UnitsPerEM);
-			auto yMax = toPixels(std::max(e.y0, e.y1), m_UnitsPerEM);
-			
-			auto x0 = toPixels(e.x0, m_UnitsPerEM);
-			auto y1 = toPixels(e.y1, m_UnitsPerEM);
-			auto x1 = toPixels(e.x1, m_UnitsPerEM);
-			auto y0 = toPixels(e.y0, m_UnitsPerEM);
-
-			if (scanline >= yMin && scanline <= yMax) {
-				if (e.x0 != e.x1) { // slanted line
-					float gradient = float(y1 - y0) / (x1 - x0);
-					float intercept = y0 - gradient * x0;
-					hit_list.push_back( (scanline - intercept) / gradient );
-				}
-				else { // vertical line
-					hit_list.push_back(x0);
-				}
+		for (size_t k = 0; k < edge_table.size(); k++) {
+			Edge& e = edge_table.at(k);
+			if (e.is_dirty) {
+				e.is_dirty = false;
+				continue;
 			}
+
+			const auto vertex_max = e.p0.yc > e.p1.yc ? e.p0 : e.p1;
+			const auto vertex_min = e.p0.yc < e.p1.yc ? e.p0 : e.p1;
+
+			const auto yMin = toPixels(vertex_min.yc, m_UnitsPerEM);
+			const auto yMax = toPixels(vertex_max.yc, m_UnitsPerEM);
+			
+			const auto x0 = toPixels(e.p0.xc, m_UnitsPerEM);
+			const auto y0 = toPixels(e.p0.yc, m_UnitsPerEM);
+
+			const auto y1 = toPixels(e.p1.yc, m_UnitsPerEM);
+			const auto x1 = toPixels(e.p1.xc, m_UnitsPerEM);
+
+			if (scanline > yMin && scanline < yMax) {
+				// @note: Scanline intersects the edge, so
+				// calculate its intersection x-coord.
+				float ix = x0;
+				
+				if (e.p0.xc != e.p1.xc) { // slanted line
+					const float gradient = float(y1 - y0) / (x1 - x0);
+					const float intercept = y0 - gradient * x0;
+					ix = (scanline - intercept) / gradient;
+				}
+
+				hit_list.push_back(ix);
+			}
+			else if (scanline == yMin || scanline == yMax) {
+				// classify the points for this edge.
+				const Point *ptI, *ptO = nullptr;
+				if (scanline == yMin) {
+					ptI = &vertex_min;
+					ptO = &vertex_max;
+				}
+				else {
+					ptI = &vertex_max;
+					ptO = &vertex_min;
+				}
+
+				size_t j = k + 1;
+				Edge& se = edge_table.at(j);
+				const auto se_y0 = toPixels(se.p0.yc, m_UnitsPerEM);
+				const auto pt1 = (scanline == se_y0) ? se.p1 : se.p0; // next edge
+
+				const float theta = (ptO->yc - scanline) * (pt1.yc - scanline);
+				if (theta > 0.0f) hit_list.push_back(ptI->xc);
+				hit_list.push_back(ptI->xc);
+				se.is_dirty = false;
+			}
+
 		}
 
 		// fill in the predetermined spans.
