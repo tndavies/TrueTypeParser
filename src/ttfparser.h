@@ -4,30 +4,23 @@
 #include <assert.h>
 #include <vector>
 
-typedef int16_t FontUnit;
+struct libfnt_point {	
+	libfnt_point(int16_t t_xc, int16_t t_yc, bool t_oc)
+		: x(t_xc), y(t_yc), on_curve(t_oc) {}
 
-struct Point {
-	Point(int16_t t_xc, int16_t t_yc, bool t_oc)
-		: xc(t_xc), yc(t_yc), on_curve(t_oc) {}
+	libfnt_point() {}
 
-	int16_t xc, yc;
+	int16_t x, y;
 	bool on_curve;
-
-	bool operator==(const Point& other) const {
-		return this->xc == other.xc && this->yc == other.yc;
-	}
-
-	bool operator!=(const Point& other) const {
-		return !(*this == other);
-	}
 };
 
-struct Edge {
-	Point p0, p1;
+struct libfnt_edge {
+	libfnt_edge(libfnt_point p0, libfnt_point p1, float upem);
 
-	Edge(FontUnit x0, FontUnit y0, FontUnit x1, FontUnit y1)
-		: p0(x0, y0, true), p1(x1, y1, true)
-	{}
+	bool is_vertical, active;
+	float ymax, ymin;
+	float xmax, xmin;
+	float m, c, sclx;
 };
 
 struct Bitmap {
@@ -40,7 +33,7 @@ struct Bitmap {
 };
 
 struct Outline_Descriptor {
-	std::vector<Point> points;
+	std::vector<libfnt_point> points;
 	int x_extent, y_extent;
 };
 
@@ -80,8 +73,6 @@ public:
 	Outline_Descriptor ExtractOutline(int cp);
 
 	Bitmap allocate_bitmap(const Outline_Descriptor& outline);
-
-	void find_intersections(size_t kCurrEdge, float scl, std::vector<float>& hits, std::vector<Edge>& edge_table);
 
 private:
 	std::unordered_map<std::string, uint32_t> m_Tables;
