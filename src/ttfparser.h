@@ -8,10 +8,18 @@ struct libfnt_point {
 	libfnt_point(int16_t t_xc, int16_t t_yc, bool t_oc)
 		: x(t_xc), y(t_yc), on_curve(t_oc) {}
 
-	libfnt_point() {}
-
 	int16_t x, y;
 	bool on_curve;
+
+	libfnt_point operator+(const libfnt_point& p) const
+	{
+		return libfnt_point(this->x + p.x, this->y + p.y, NULL);
+	}
+
+	libfnt_point operator/(float scalar)
+	{
+		return libfnt_point(this->x / scalar, this->y / scalar, NULL);
+	}
 };
 
 struct libfnt_edge {
@@ -65,12 +73,12 @@ public:
 		return m_Data + m_Tables.at(tag);
 	}
 
-	Bitmap RasterizeGlyph(int cp);
+	Bitmap rasterize(int cp);
 
 	void check_supported();
 	void register_tables();
 	void select_encoding_scheme();
-	Outline_Descriptor ExtractOutline(int cp);
+	Outline_Descriptor extract_outline(int cp);
 
 	Bitmap allocate_bitmap(const Outline_Descriptor& outline);
 

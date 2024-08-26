@@ -7,13 +7,13 @@
 
 int main(int argc, char* argv[]) 
 {
-	//if (argc < 3) {
-	//	std::cout << "Error: Invalid inputs!";
-	//	return -1;
-	//}
+	if (argc < 3) {
+		std::cout << "Error: Invalid inputs!";
+		return -1;
+	}
 
 	TTFParser ttf(argv[1]);
-	auto bitmap = ttf.RasterizeGlyph(0);
+	auto bitmap = ttf.rasterize(*argv[2]);
 
 	auto x = stbi_write_bmp("letter.bmp", bitmap.width, bitmap.height, 1, bitmap.memory);
 	assert(x);
