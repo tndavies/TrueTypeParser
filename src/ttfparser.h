@@ -31,6 +31,10 @@ struct libfnt_edge {
 	float m, c, sclx;
 };
 
+struct libfnt_contour {
+	std::vector<libfnt_point> points;
+};
+
 struct Bitmap {
 	void* memory;
 	size_t width, height;
@@ -41,7 +45,7 @@ struct Bitmap {
 };
 
 struct Outline_Descriptor {
-	std::vector<libfnt_point> points;
+	std::vector<libfnt_contour> contours;
 	int x_extent, y_extent;
 };
 

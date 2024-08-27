@@ -9,6 +9,8 @@
 #include <list>
 #include <stack>
 
+using EdgeTable = std::vector<libfnt_edge>;
+
 TTFParser::TTFParser(const char* file_path) 
 	: m_FilePath(file_path), m_Data(nullptr), m_Encoding(nullptr)
 {
@@ -105,7 +107,7 @@ std::vector<int16_t>* parse_coordinate_data(const std::vector<uint8_t>& flags,
 
 Outline_Descriptor TTFParser::extract_outline(int cp) 
 {
-	auto glyph_index = m_Encoding->get_glyph_index(cp);
+	const auto glyph_index = m_Encoding->get_glyph_index(cp);
 
 	// Find the location of the outline data.
 	uint8_t* outline = nullptr;
@@ -137,10 +139,15 @@ Outline_Descriptor TTFParser::extract_outline(int cp)
 	auto x_extent = xMax - xMin;
 	auto y_extent = yMax - yMin;
 
-	uint8_t* contour_data = outline + 10;
-	auto* point_map_end = (uint16_t*)contour_data + (contour_count - 1);
-	auto point_count = get_u16(point_map_end) + 1;
-	uint8_t* hprog = (uint8_t*)(point_map_end + 1);
+	uint16_t* contour_data = (uint16_t*)(outline + 10);
+	uint16_t *indicies = new uint16_t[contour_count]; // @todo: free me!
+	for (size_t k = 0; k < contour_count; k++) {
+		indicies[k] = get_u16(contour_data + k);
+	}
+
+	size_t point_count = 1 + indicies[contour_count - 1];
+
+	uint8_t* hprog = (uint8_t*)((uint16_t*)contour_data + contour_count);
 	uint8_t* stream = hprog + 2 + get_u16(hprog);
 
 	// decompress flags array.
@@ -161,14 +168,22 @@ Outline_Descriptor TTFParser::extract_outline(int cp)
 	std::vector<int16_t>* xc_buff = parse_coordinate_data(flags, &stream, 1, 4);
 	std::vector<int16_t>* yc_buff = parse_coordinate_data(flags, &stream, 2, 5);
 
-	// Build points list.
-	std::vector<libfnt_point> points;
-	for (size_t k = 0; k < flags.size(); k++) {
-		points.emplace_back(xc_buff->at(k) - xMin, yc_buff->at(k) - yMin, flags[k] & 1);
-	}
-	points.push_back(points.front());
+	std::vector<libfnt_contour> contours(contour_count);
 
-	return {points, x_extent, y_extent};
+	size_t sidx = 0;
+	for (size_t i = 0; i < contour_count; i++) {
+		const auto endidx = indicies[i];
+		auto& contour = contours[i];
+
+		for (size_t k = sidx; k <= endidx; k++) {
+			contour.points.emplace_back(xc_buff->at(k) - xMin, yc_buff->at(k) - yMin, flags[k] & 1);
+		}
+
+		contour.points.push_back(contour.points.front()); // repeat first point of contour.
+		sidx = endidx + 1;
+	}
+
+	return {contours, x_extent, y_extent};
 }
 
 float toPixels(int16_t em, float upem, float pts = 12.0f, float dpi = 96.0f) 
@@ -288,23 +303,15 @@ void subdivide_qbezier(const libfnt_bezier& b, float upem,
 
 /////////////////////////////////////////////////////////////////////////////////////
 
-std::vector<libfnt_edge> build_edge_table(std::vector<libfnt_point> Points, float upem) 
+void build_edge_table(std::vector<libfnt_point> Points, float upem, EdgeTable& et) 
 {
-	assert(Points[0].on_curve); // @todo: handle p1 being off-curve.
+	// @todo: handle p1 being off-curve.
 	
-#ifdef Print_Seq
-	std::cout << "Sequence: ";
-	for (auto& p : Points) std::cout << (p.on_curve ? '1' : '0');
-	std::cout << std::endl;
-#endif
-
-	size_t j = 0;
-	std::vector<libfnt_edge> edge_table;
-
 	// blowout sequence...
 	// @speed: iterate backwards to avoid call to size()?
-	while (j < Points.size() - 1) {
+	size_t j = 0;
 
+	while (j < Points.size() - 1) {
 		const auto p0 = Points[j];
 		const auto p1 = Points[j + 1];
 
@@ -324,11 +331,6 @@ std::vector<libfnt_edge> build_edge_table(std::vector<libfnt_point> Points, floa
 		++j;
 	}
 
-#ifdef Print_Seq
-	std::cout << "Blown-out: ";
-	for (auto& p : Points) std::cout << (p.on_curve ? '1' : '0');
-	std::cout << std::endl;
-#endif
 	// @speed: bitfield & bit-op checks to increase cache bandwidth
 	// and reduce branching?
 
@@ -344,7 +346,7 @@ std::vector<libfnt_edge> build_edge_table(std::vector<libfnt_point> Points, floa
 			// add edge
 			if (buff[0].y != buff[1].y) {
 				libfnt_edge e(buff[0], buff[1], upem);
-				edge_table.push_back(e);
+				et.push_back(e);
 			}
 
 			const libfnt_point cached = buff[1];
@@ -355,7 +357,7 @@ std::vector<libfnt_edge> build_edge_table(std::vector<libfnt_point> Points, floa
 		else if (buff.size() == 3 && buff[0].on_curve && !buff[1].on_curve && buff[2].on_curve) {
 			libfnt_bezier bc(buff[0], buff[1], buff[2]);
 
-			subdivide_qbezier(bc, upem, edge_table, libfnt_quality_level::Medium);
+			subdivide_qbezier(bc, upem, et, libfnt_quality_level::Medium);
 
 			const libfnt_point cached = buff[2];
 			buff.clear();
@@ -363,7 +365,6 @@ std::vector<libfnt_edge> build_edge_table(std::vector<libfnt_point> Points, floa
 		}
 	}
 
-	return edge_table;
 }
 
 /////////////////////////////////////////////////////////////////////////////////////
@@ -386,8 +387,11 @@ Bitmap TTFParser::rasterize(int Codepoint)
 	// Extract outline information
 	auto outline_desc = extract_outline(Codepoint);
 
-	// Construct edge table. 
-	auto edges = build_edge_table(outline_desc.points, m_UnitsPerEM);
+	// Construct edge table.
+	EdgeTable et;
+	for (const auto& c : outline_desc.contours) {
+		build_edge_table(c.points, m_UnitsPerEM, et);
+	}
 
 	// Allocate bitmap memory.
 	Bitmap bitmap = allocate_bitmap(outline_desc);
@@ -398,7 +402,7 @@ Bitmap TTFParser::rasterize(int Codepoint)
 	for(float scanline = 0.5f; scanline < bitmap.height; scanline += kScanlineDelta) {
 		std::vector<float> crossings; // @perf: set capacity to avoid allocs?
 
-		for(auto& e: edges){
+		for(auto& e: et){
 			if(e.active) {
 				if(e.ymax <= scanline) {
 					// edge shouldn't be active anymore.
