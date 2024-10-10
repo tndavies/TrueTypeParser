@@ -1,20 +1,20 @@
-#include <iostream>
-#include "ttfparser.h"
+#include <unordered_map>
+#include "libfnt.h"
+#include "utils.h"
 
 #define __STDC_LIB_EXT1__
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
-int main(int argc, char* argv[]) 
+int main(int argc, char* argv[])
 {
-	if (argc < 3) {
-		std::cout << "Error: Invalid inputs!";
-		return -1;
-	}
+	libfnt::library lib("arial.ttf");
 
-	TTFParser ttf(argv[1]);
-	auto bitmap = ttf.rasterize(*argv[2]);
+	auto glyph = lib.load_glyph('7');
 
-	auto x = stbi_write_bmp("letter.bmp", bitmap.width, bitmap.height, 1, bitmap.memory);
-	assert(x);
+	auto bmp = lib.render_glyph(glyph, 12.0f);
+
+	stbi_write_bmp("example.bmp", bmp->width, bmp->height, 1, bmp->m_memory);
+
+	return 0;
 }
