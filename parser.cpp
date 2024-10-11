@@ -5,8 +5,25 @@
 #include <stack>
 #include <algorithm>
 #include <iostream>
+#include <functional>
 
 #define OnCurve(x) (x & 1)
+
+struct contour {
+	std::vector<uint8_t> flags;
+	std::vector<int16_t> xs;
+	std::vector<int16_t> ys;
+
+	auto total_points() const { return flags.size(); }
+};
+
+#define XSelect [](contour &c) -> auto& { return c.xs; }
+#define YSelect [](contour &c) -> auto& { return c.ys; }
+#define RepeatBit 3
+#define XShort	1
+#define YShort	2
+#define XDual	4
+#define YDual	5
 
 using namespace libfnt;
 
@@ -86,71 +103,117 @@ ttf_parser::get_metrics()
 	m_upem = get_u16(head + 18);
 }
 
-template <size_t shortbit_idx, size_t infobit_idx>
-std::vector<int16_t>* 
-decompress_coordinates(const std::vector<uint8_t> &flags, uint8_t** stream_handle) 
+void unpack_flags(
+	uint8_t*& dataStream,
+	std::vector<contour>& contours,
+	std::vector<uint16_t>& endPoints
+)
 {
-	std::vector<int16_t>* buff = new std::vector<int16_t>{ 0 };
+	const auto kRepeatMask = (1 << RepeatBit); // @todo: make constexpr?
 
-	for (auto flag : flags) {
-		bool is_short = flag & (1 << shortbit_idx);
-		bool info_bit = flag & (1 << infobit_idx);
+	size_t prev_total_pts = 0;
+	for(const auto &idx : endPoints) {
+		contours.emplace_back();
+		auto &flags = contours.back().flags;
 
-		if (is_short) {
-			uint8_t delta = **stream_handle;
-			(*stream_handle)++;
+		const auto contour_pt_count = (idx + 1) - prev_total_pts;
 
-			int16_t cval = buff->back() + delta * (info_bit ? 1 : -1);
-			buff->push_back(cval);
+		while (flags.size() < contour_pt_count) {
+			const auto flag = *dataStream++;
+			const auto repeat_count = (flag & kRepeatMask) ? *dataStream++ : 0;
+			flags.insert(flags.end(), 1 + repeat_count, flag);
 		}
-		else {
-			if (info_bit) {
-				buff->push_back(buff->back());
-			}
-			else {
-				auto delta = get_s16(*stream_handle);
-				*stream_handle += 2;
 
-				int16_t cval = buff->back() + delta;
-				buff->push_back(cval);
-			}
-		}
+		prev_total_pts += contour_pt_count;
 	}
-
-	buff->erase(buff->begin()); // remove the reference point (0,0).
-
-	return buff;
 }
 
-void
-gen_mesh(
-	size_t ptidx0, size_t ptidx1, 
-	std::vector<int16_t> *xs, 
-	std::vector<int16_t> *ys,
-	std::vector<uint8_t> &flags,
-	edgeTable *et
-) 
+void 
+unpack_axis(
+	uint8_t*& dataStream,
+	std::vector<contour>& contours,
+	const std::function<std::vector<int16_t>& (contour&)>& selectBuffer,
+	const size_t kShortBit,
+	const size_t kDualBit)
 {
-	std::vector<size_t> buff;
-	buff.reserve(3);
+	// todo: use constexpr to make bitmask at compile time?
+	const auto kShortMask = (1 << kDualBit);
+	const auto kDualMask = (1 << kDualBit);
 
-	const auto num_pts = (ptidx1 - ptidx0) + 1;
+	size_t ref_val = 0; 
+	for (auto &contour : contours) {
+		auto& buff = selectBuffer(contour);
+		buff.emplace_back(ref_val);
 
-	for(size_t i = 0; i <= num_pts; ++i) {
-		const auto pt_idx = ptidx0 + (i % num_pts);
-		buff.push_back(pt_idx);
+		for (const auto& flg : contour.flags) {
+			const bool dual_bit = flg & kDualMask;
 
-		switch(buff.size()) {
+			if (flg & kShortMask) {
+				const auto delta = *dataStream++;
+				const auto val = buff.back() + delta * (dual_bit ? 1 : -1);
+				buff.push_back(val);
+			}
+			else {
+				if (dual_bit) {
+					buff.push_back(buff.back());
+				}
+				else {
+					const auto delta = get_s16(dataStream);
+					const auto val = buff.back() + delta;
+					buff.push_back(val);
+					dataStream += 2;
+				}
+			}
+		}
+
+		buff.erase(buff.begin()); // remove the reference component.
+		ref_val = buff.back();
+	}
+}
+
+edgeTable*
+generate_meshes(std::vector<contour>& contours)
+{
+	auto* et = new edgeTable();
+
+	for (auto& c : contours) {
+		auto& flags = c.flags;
+		auto& xs = c.xs;
+		auto& ys = c.ys;
+
+		assert(OnCurve(flags[0])); // Assume the 1st contour point is on-curve.
+
+		// Create any inferred points.
+		for (size_t i = 0; i < flags.size() - 1; ++i) {
+			if (!OnCurve(flags[i]) && !OnCurve(flags[i + 1])) {
+				float x = (xs.at(i) + xs.at(i + 1)) / 2.0f;
+				float y = (ys.at(i) + ys.at(i + 1)) / 2.0f;
+
+				flags.insert(flags.begin() + i + 1, 0xff);
+				xs.insert(xs.begin() + i + 1, x);
+				ys.insert(ys.begin() + i + 1, y);
+			}
+		}
+
+		const auto& num_pts = flags.size();
+		std::vector<size_t> buff;
+
+		//
+		for (size_t k = 0; k <= num_pts; ++k) {
+			const auto idx = k % num_pts; // point index into the data buffers.
+			buff.push_back(idx);
+
+			switch (buff.size()) {
 			case 2: {
-				const auto &slt0 = buff[0];
-				const auto &slt1 = buff[1];
+				const auto& slt0 = buff[0];
+				const auto& slt1 = buff[1];
 
-				if(OnCurve(flags[slt0]) && OnCurve(flags[slt1])) {
-					fPoint p0 (xs->at(slt0), ys->at(slt0));
-					fPoint p1 (xs->at(slt1), ys->at(slt1));
+				if (OnCurve(flags[slt0]) && OnCurve(flags[slt1])) {
+					fPoint p0(xs.at(slt0), ys.at(slt0));
+					fPoint p1(xs.at(slt1), ys.at(slt1));
 
-					if(p0.y != p1.y) { // skip horizontal edges
-						et->add_edge(p0, p1); 
+					if (p0.y != p1.y) { // skip horizontal edges
+						et->add_edge(p0, p1);
 					}
 
 					buff[0] = buff[1];
@@ -159,30 +222,31 @@ gen_mesh(
 			} break;
 
 			case 3: {
-				const auto &slt0 = buff[0];
-				const auto &slt1 = buff[1];
-				const auto &slt2 = buff[2];
+				const auto& slt0 = buff[0];
+				const auto& slt1 = buff[1];
+				const auto& slt2 = buff[2];
 
-				if(OnCurve(flags[slt0]) && !OnCurve(flags[slt1]) && OnCurve(flags[slt2])) {
-					fPoint p0 (xs->at(slt0), ys->at(slt0));
-					fPoint p1 (xs->at(slt1), ys->at(slt1));
-					fPoint p2 (xs->at(slt2), ys->at(slt2));
+				if (OnCurve(flags[slt0]) && !OnCurve(flags[slt1]) && OnCurve(flags[slt2])) {
+					fPoint p0(xs.at(slt0), ys.at(slt0));
+					fPoint p1(xs.at(slt1), ys.at(slt1));
+					fPoint p2(xs.at(slt2), ys.at(slt2));
 
 					et->add_bezier(p0, p1, p2);
 
 					buff[0] = buff[2];
 					buff.pop_back();
 					buff.pop_back();
-				} 
+				}
 			} break;
+			}
 		}
-
 	}
 
+	return et;
 }
 
 OutlineData 
-ttf_parser::load_outline(const char_code c)
+ttf_parser::load_outline(size_t c)
 {
 	// Find the location of the outline data.
 	const auto glyph_index = m_mapper->get_glyph_idx(c);
@@ -213,61 +277,24 @@ ttf_parser::load_outline(const char_code c)
 	auto yMax = get_s16(outline_data + 8);
 
 	// Note: Unpack flags and decompress coordinate data. 
-
-	// @perf: Avoid doing this effective copy, and
-	// just lookup directly from the stored array.
 	uint16_t* contour_data = (uint16_t*)(outline_data + 10);
-	// uint16_t* contour_ends = new uint16_t[contour_count]; // @todo: free me!
+
 	std::vector<uint16_t> contour_ends(contour_count);
 	for (size_t k = 0; k < contour_count; k++) {
 		contour_ends[k] = get_u16(contour_data + k);
 	}
 
-	size_t point_count = 1 + contour_ends[contour_count - 1];
-
+	size_t point_count = contour_ends.back() + 1;
 	uint8_t* hprog = (uint8_t*)((uint16_t*)contour_data + contour_count);
 	uint8_t* stream = hprog + 2 + get_u16(hprog);
-	std::vector<uint8_t> flags;
 
-	while (flags.size() < point_count) {
-		uint8_t flag = *stream++;
-
-		size_t repeat_count = 1;
-		if (flag & (1 << 3)) {
-			repeat_count += *stream++;
-		}
-
-		flags.insert(flags.end(), repeat_count, flag);
-	}
-
-	auto xdata = decompress_coordinates<1,4>(flags, &stream);
-	auto ydata = decompress_coordinates<2,5>(flags, &stream);
-
-	// Create any inferred points.
-	for(size_t i = 0; i < flags.size() - 1; ++i) {
-		if(!OnCurve(flags[i]) && !OnCurve(flags[i + 1])) {
-			float x = (xdata->at(i) + xdata->at(i + 1)) / 2.0f;
-			float y = (ydata->at(i) + ydata->at(i + 1)) / 2.0f;
-
-			flags.insert(flags.begin() + i + 1, 0xff);
-			xdata->insert(xdata->begin() + i + 1, x);
-			ydata->insert(ydata->begin() + i + 1, y);
-		}
-	}
-
-	// ContourCount: 2
-	// ContourEnds[]: 5, 11
-	// Points: (0,1,2,3,4,5), (6,7,8,9,10,11)
-	
 	//
-	edgeTable *et = new edgeTable(); // glyph_mesh
-	size_t idx0 = 0;
 
-	for(size_t i = 0; i < contour_ends.size(); ++i) {
-		const auto &idx1 = contour_ends[i];
-		gen_mesh(idx0, idx1, xdata, ydata, flags, et);
-		idx0 = idx1 + 1;
-	}
+	std::vector<contour> contours;
+	unpack_flags(stream, contours, contour_ends);
+	unpack_axis(stream, contours, XSelect, XShort, XDual);
+	unpack_axis(stream, contours, YSelect, YShort, YDual);
+	const auto* et = generate_meshes(contours);
 
 	//
 

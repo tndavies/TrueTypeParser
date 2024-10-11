@@ -37,7 +37,7 @@ namespace libfnt
 
 		char* get_table(const std::string& tag) const;
 
-		OutlineData load_outline(const char_code c);
+		OutlineData load_outline(size_t c);
 
 		char* m_font; // @todo: mark const.
 	
