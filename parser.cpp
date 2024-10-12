@@ -137,7 +137,7 @@ unpack_axis(
 	const size_t kDualBit)
 {
 	// todo: use constexpr to make bitmask at compile time?
-	const auto kShortMask = (1 << kDualBit);
+	const auto kShortMask = (1 << kShortBit);
 	const auto kDualMask = (1 << kDualBit);
 
 	size_t ref_val = 0; 

@@ -6,11 +6,11 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
-int main(int argc, char* argv[])
+int main(int argc, char *argv[])
 {
 	libfnt::library lib("arial.ttf");
 
-	auto glyph = lib.load_glyph('9');
+	auto glyph = lib.load_glyph('a');
 
 	auto bmp = lib.render_glyph(glyph, 12.0f);
 
