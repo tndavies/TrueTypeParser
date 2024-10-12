@@ -29,7 +29,7 @@ library::library(const std::string& fontFilePath)
 
 OutlineData library::load_glyph(const char_code c)
 {
-	return m_parser->load_outline(c);
+	return m_parser->LoadGlyph(c);
 }
 
 const RasterTarget* library::render_glyph(const OutlineData &outlineInfo, const float ptSize, const render_options flags)

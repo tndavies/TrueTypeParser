@@ -15,12 +15,12 @@ const RasterTarget* libfnt::rasterise_outline(const OutlineData &ot, float upem)
 	auto raster_table = *ot.et;
 	
 	for (auto& e : raster_table.edges) {
-		e.transform(upem, ot.xMin, ot.yMin);
+		e.transform(upem, ot.bounding_box.xMin, ot.bounding_box.yMin);
 	}
 
 	// Allocate bitmap memory.
-	const auto xExtent = em2raster(ot.xMax - ot.xMin, upem);
-	const auto yExtent = em2raster(ot.yMax - ot.yMin, upem);
+	const auto xExtent = em2raster(ot.bounding_box.xMax - ot.bounding_box.xMin, upem);
+	const auto yExtent = em2raster(ot.bounding_box.yMax - ot.bounding_box.yMin, upem);
 
 	const size_t img_width = std::ceil(xExtent);
 	const size_t img_height = std::ceil(yExtent);

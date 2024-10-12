@@ -1,15 +1,16 @@
-#include <assert.h>
-#include "parser.h"
-#include "utils.h"
-#include <string>
-#include <stack>
+#include <functional>
 #include <algorithm>
 #include <iostream>
-#include <functional>
+#include <assert.h>
+#include <string>
+#include <stack>
 
-#define OnCurve(x) (x & 1)
+#include "parser.h"
+#include "utils.h"
+#include "stream.h"
 
-struct contour {
+struct contour
+{
 	std::vector<uint8_t> flags;
 	std::vector<int16_t> xs;
 	std::vector<int16_t> ys;
@@ -17,13 +18,14 @@ struct contour {
 	auto total_points() const { return flags.size(); }
 };
 
-#define XSelect [](contour &c) -> auto& { return c.xs; }
-#define YSelect [](contour &c) -> auto& { return c.ys; }
+#define OnCurve(x) (x & 1)
+#define XSelect [](contour &c) -> auto & { return c.xs; }
+#define YSelect [](contour &c) -> auto & { return c.ys; }
 #define RepeatBit 3
-#define XShort	1
-#define YShort	2
-#define XDual	4
-#define YDual	5
+#define XShort 1
+#define YShort 2
+#define XDual 4
+#define YDual 5
 
 using namespace libfnt;
 
@@ -32,95 +34,90 @@ using namespace libfnt;
 ttf_parser::ttf_parser(char* fontMemory)
 	: m_font(fontMemory), m_mapper(nullptr), m_upem(0) {}
 
-void
-ttf_parser::init()
+void ttf_parser::init()
 {
-	is_supported();
 	register_tables();
 	select_charmap();
 	get_metrics();
 }
 
-bool
-ttf_parser::is_supported()
+void ttf_parser::register_tables()
 {
-	auto outline_type = get_u32(m_font);
-	return (outline_type == 0x00010000 || outline_type == 0x74727565);
-}
+	Stream ttfFile(m_font);
+	ttfFile.Skip(4); // skip to table-count
+	uint16_t tableCount = ttfFile.GetField<uint16_t>();
+	ttfFile.Skip(6); // skip to 1st table-descriptor
 
-void
-ttf_parser::register_tables()
-{
-	auto num_tables = get_u16(m_font + 4);
-
-	for (size_t i = 0; i < num_tables; i++) {
-		auto metadata = (m_font + 12) + (16 * i);
-
+	for (size_t i = 0; i < tableCount; i++) {
 		std::string tag;
 		for (size_t k = 0; k < 4; k++) {
-			tag += std::tolower(metadata[k]);
+			uint8_t letter = ttfFile.GetField<uint8_t>();
+			tag += std::tolower(letter);
 		}
 
-		auto offset = get_u32(metadata + 8);
+		ttfFile.Skip(4); // skip checksum
+		uint32_t tableOffset = ttfFile.GetField<uint32_t>();
+		m_tables.insert(std::make_pair(tag, tableOffset));
 
-		m_tables.insert(std::make_pair(tag, offset));
+		ttfFile.Skip(4); // skip table length
 	}
 }
 
-void 
-ttf_parser::select_charmap()
+void ttf_parser::select_charmap()
 {
-	auto* cmap = get_table("cmap");
-	auto num_encodings = get_u16(cmap + 2);
+	Stream cmap = GetTable("cmap");
+	const uint8_t* cmapTop = (const uint8_t*)cmap.get();
 
-	for (size_t k = 0; k < num_encodings; k++)
-	{
-		auto* encoding_metatable = cmap + 4 + 8 * k;
-		auto* format_table = cmap + get_u32(encoding_metatable + 4);
-		auto format = get_u16(format_table);
+	cmap.SkipField<uint16_t>(); // skip version number
+	uint16_t encodingCount = cmap.GetField<uint16_t>();
 
-		switch (format) {
-			case 0:
-				m_mapper = new Format0_Mapper(format_table + 6);
-				break;
+	for (size_t k = 0; k < encodingCount; k++) {
+		cmap.Skip(4); // skip to encoding table offset
+		uint32_t encodingTableOffset = cmap.GetField<uint32_t>();
+
+		Stream encodingTable(cmapTop + encodingTableOffset);
+		uint16_t encodingFormat = encodingTable.GetField<uint16_t>();
+
+		if (!encodingFormat) {
+			const uint8_t* glyphLookupTable = (const uint8_t*)encodingTable.get() + 4;
+			m_mapper = new Format0_Mapper(glyphLookupTable);
+			break;
 		}
 	}
 
 	assert(m_mapper);
 }
 
-char*
-ttf_parser::get_table(const std::string &tag) const
+Stream
+ttf_parser::GetTable(const std::string& tag) const
 {
-	return m_font + m_tables.at(tag);
+	return Stream(m_font + m_tables.at(tag));
 }
 
-void 
-ttf_parser::get_metrics()
+void ttf_parser::get_metrics()
 {
-	auto head = get_table("head");
-
-	m_upem = get_u16(head + 18);
+	Stream head = GetTable("head");
+	head.Skip(18);
+	m_upem = head.GetField<uint16_t>();
 }
 
 void unpack_flags(
-	uint8_t*& dataStream,
+	Stream& dataStream,
 	std::vector<contour>& contours,
-	std::vector<uint16_t>& endPoints
-)
+	std::vector<uint16_t>& endPoints)
 {
 	const auto kRepeatMask = (1 << RepeatBit); // @todo: make constexpr?
 
 	size_t prev_total_pts = 0;
-	for(const auto &idx : endPoints) {
+	for (const auto& idx : endPoints) {
 		contours.emplace_back();
-		auto &flags = contours.back().flags;
+		auto& flags = contours.back().flags;
 
 		const auto contour_pt_count = (idx + 1) - prev_total_pts;
 
 		while (flags.size() < contour_pt_count) {
-			const auto flag = *dataStream++;
-			const auto repeat_count = (flag & kRepeatMask) ? *dataStream++ : 0;
+			uint8_t flag = *dataStream;
+			auto repeat_count = (flag & kRepeatMask) ? *dataStream : 0;
 			flags.insert(flags.end(), 1 + repeat_count, flag);
 		}
 
@@ -128,29 +125,28 @@ void unpack_flags(
 	}
 }
 
-void 
-unpack_axis(
-	uint8_t*& dataStream,
+void unpack_axis(
+	Stream& dataStream,
 	std::vector<contour>& contours,
 	const std::function<std::vector<int16_t>& (contour&)>& selectBuffer,
 	const size_t kShortBit,
 	const size_t kDualBit)
 {
 	// todo: use constexpr to make bitmask at compile time?
-	const auto kShortMask = (1 << kShortBit);
-	const auto kDualMask = (1 << kDualBit);
+	auto kShortMask = (1 << kShortBit);
+	auto kDualMask = (1 << kDualBit);
 
-	size_t ref_val = 0; 
-	for (auto &contour : contours) {
+	size_t ref_val = 0;
+	for (auto& contour : contours) {
 		auto& buff = selectBuffer(contour);
 		buff.emplace_back(ref_val);
 
 		for (const auto& flg : contour.flags) {
-			const bool dual_bit = flg & kDualMask;
+			bool dual_bit = flg & kDualMask;
 
 			if (flg & kShortMask) {
-				const auto delta = *dataStream++;
-				const auto val = buff.back() + delta * (dual_bit ? 1 : -1);
+				auto delta = *dataStream;
+				auto val = buff.back() + delta * (dual_bit ? 1 : -1);
 				buff.push_back(val);
 			}
 			else {
@@ -158,10 +154,9 @@ unpack_axis(
 					buff.push_back(buff.back());
 				}
 				else {
-					const auto delta = get_s16(dataStream);
-					const auto val = buff.back() + delta;
+					auto delta = dataStream.GetField<int16_t>();
+					auto val = buff.back() + delta;
 					buff.push_back(val);
-					dataStream += 2;
 				}
 			}
 		}
@@ -204,7 +199,8 @@ generate_meshes(std::vector<contour>& contours)
 			buff.push_back(idx);
 
 			switch (buff.size()) {
-			case 2: {
+			case 2:
+			{
 				const auto& slt0 = buff[0];
 				const auto& slt1 = buff[1];
 
@@ -219,9 +215,11 @@ generate_meshes(std::vector<contour>& contours)
 					buff[0] = buff[1];
 					buff.pop_back();
 				}
-			} break;
+			}
+			break;
 
-			case 3: {
+			case 3:
+			{
 				const auto& slt0 = buff[0];
 				const auto& slt1 = buff[1];
 				const auto& slt2 = buff[2];
@@ -237,7 +235,8 @@ generate_meshes(std::vector<contour>& contours)
 					buff.pop_back();
 					buff.pop_back();
 				}
-			} break;
+			}
+			break;
 			}
 		}
 	}
@@ -245,58 +244,53 @@ generate_meshes(std::vector<contour>& contours)
 	return et;
 }
 
-OutlineData 
-ttf_parser::load_outline(size_t c)
+OutlineData
+ttf_parser::LoadGlyph(size_t c)
 {
-	// Find the location of the outline data.
-	const auto glyph_index = m_mapper->get_glyph_idx(c);
-	char* outline_data = nullptr;
-	auto head = get_table("head");
-	auto loca = get_table("loca");
-	auto glyf = get_table("glyf");
-
-	auto loca_format = get_s16(head + 50);
-	assert(loca_format == 0 || loca_format == 1);
-
-	if (loca_format == 1) {
-		auto* offset = (uint32_t*)loca + glyph_index;
-		outline_data = glyf + get_u32(offset);
-	}
-	else {
-		auto* offset = (uint16_t*)loca + glyph_index;
-		outline_data = glyf + 2 * get_u16(offset);
-	}
-
-	// Parse the point data.
-	auto contour_count = get_s16(outline_data);
-	assert(contour_count > 0); // only support simple outline atm!
-
-	auto xMin = get_s16(outline_data + 2);
-	auto yMin = get_s16(outline_data + 4);
-	auto xMax = get_s16(outline_data + 6);
-	auto yMax = get_s16(outline_data + 8);
-
-	// Note: Unpack flags and decompress coordinate data. 
-	uint16_t* contour_data = (uint16_t*)(outline_data + 10);
-
-	std::vector<uint16_t> contour_ends(contour_count);
-	for (size_t k = 0; k < contour_count; k++) {
-		contour_ends[k] = get_u16(contour_data + k);
-	}
-
-	size_t point_count = contour_ends.back() + 1;
-	uint8_t* hprog = (uint8_t*)((uint16_t*)contour_data + contour_count);
-	uint8_t* stream = hprog + 2 + get_u16(hprog);
+	auto glyphID = m_mapper->get_glyph_idx(c);
 
 	//
 
+	Stream head = GetTable("head");
+	head.Skip(50); // skip to locaFormat field 
+	bool locaLongFormat = (bool)head.GetField<int16_t>();
+
+	Stream loca = GetTable("loca");
+	size_t bytesPerElement = locaLongFormat ? 4 : 2;
+	loca.Skip(bytesPerElement * glyphID); // jump to array element for glyph.
+	uint32_t arrayValue = locaLongFormat ? loca.GetField<uint32_t>() : loca.GetField<uint16_t>();
+	uint32_t glyphOffset = locaLongFormat ? arrayValue : 2 * arrayValue;
+
+	Stream glyf = GetTable("glyf");
+	glyf.Skip(glyphOffset);
+
+	// Process outline data
+
+	auto contourCount = glyf.GetField<int16_t>();
+
+	assert(contourCount > 0); // We don't support compund glyphs yet.
+
+	auto xMin = glyf.GetField<int16_t>();
+	auto yMin = glyf.GetField<int16_t>();
+	auto xMax = glyf.GetField<int16_t>();
+	auto yMax = glyf.GetField<int16_t>();
+	BoundingBox bb(xMin, yMin, xMax, yMax);
+
+	std::vector<uint16_t> contourEndPts(contourCount);
+	for (size_t k = 0; k < contourCount; ++k) {
+		contourEndPts[k] = glyf.GetField<uint16_t>();
+	}
+
+	auto instructionCount = glyf.GetField<uint16_t>();
+	glyf.Skip(instructionCount);
+
 	std::vector<contour> contours;
-	unpack_flags(stream, contours, contour_ends);
-	unpack_axis(stream, contours, XSelect, XShort, XDual);
-	unpack_axis(stream, contours, YSelect, YShort, YDual);
+	unpack_flags(glyf, contours, contourEndPts);
+	unpack_axis(glyf, contours, XSelect, XShort, XDual);
+	unpack_axis(glyf, contours, YSelect, YShort, YDual);
 	const auto* et = generate_meshes(contours);
 
 	//
 
-	return OutlineData(et, xMin, xMax, yMin, yMax);
+	return OutlineData(et, bb);
 }
