@@ -1,0 +1,11 @@
+﻿.vs
+.vscode
+libttf
+x64
+*.txt
+*.ttf
+*.bmp
+libttf.sln
+libttf.vcxproj
+libttf.vcxproj.filters
+libttf.vcxproj.user
