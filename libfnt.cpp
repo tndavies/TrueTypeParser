@@ -1,15 +1,12 @@
-#include <assert.h> // @todo: replace asserts with proper error codes.
+#include <assert.h>
 #include <fstream>
 
 #include "libfnt.h"
-#include "raster.h"
 
-using namespace libfnt;
-
-library::library(const std::string& fontFilePath) 
+library::library(const std::string& pFontPath)
 {
 	// Load font file into memory.
-	std::ifstream file_handle(fontFilePath, std::ios::binary);
+	std::ifstream file_handle(pFontPath, std::ios::binary);
 	assert(file_handle.is_open());
 
 	file_handle.seekg(0, file_handle.end);
@@ -19,20 +16,20 @@ library::library(const std::string& fontFilePath)
 	void* font = std::malloc(file_size);
 	file_handle.read((char*)font, file_size);
 	file_handle.close();
-	
+
 	assert(font);
 
 	//
-	m_parser = new ttf_parser((char*)font);
-	m_parser->init(); // @todo: check for error.
+
+	parser = new Parser(font);
 }
 
-OutlineData library::load_glyph(const char_code c)
+Outline library::LoadGlyph(const size_t pCharCode)
 {
-	return m_parser->LoadGlyph(c);
+	return parser->LoadGlyph(pCharCode);
 }
 
-const RasterTarget* library::render_glyph(const OutlineData &outlineInfo, const float ptSize, const render_options flags)
+const RasterTarget* library::RenderGlyph(const Outline& pOutline, const float pPointSize)
 {
-	return rasterise_outline(outlineInfo, m_parser->m_upem);
+	return RenderOutline(pOutline, parser->upem);
 }

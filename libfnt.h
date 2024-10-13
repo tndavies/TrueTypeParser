@@ -1,25 +1,21 @@
 #pragma once
 
-#include <cstdint>
 #include <string>
-#include "parser.h"
 
-namespace libfnt 
-{
-	typedef uint32_t char_code;
+#include "outline.h" 
+#include "parser.h" 
+#include "raster.h" 
 
-	enum class render_options {
-		Default
-	};
+//
 
-	struct library {
-		ttf_parser* m_parser;
+struct library {
+    library(const std::string& pFontFilePath);
 
-		library(const std::string& fontFilePath);
+    Outline LoadGlyph(const size_t pCharCode);
 
-		OutlineData load_glyph(const char_code c);
+    const RasterTarget* RenderGlyph(const Outline& pOutline, const float pPointSize);
 
-		const RasterTarget* render_glyph(const OutlineData &outlineInfo, const float ptSize, 
-			const render_options flags = render_options::Default);
-	};
-}
+    //
+
+    Parser* parser;
+};
