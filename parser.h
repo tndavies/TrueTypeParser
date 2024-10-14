@@ -6,6 +6,7 @@
 
 #include "stream.h"
 #include "outline.h"
+#include "encodings.h"
 
 #define XSelect [](Contour& c) -> auto & { return c.xs; }
 #define YSelect [](Contour& c) -> auto & { return c.ys; }
@@ -18,26 +19,12 @@
 
 //
 
-class Format0_Mapper {
-    public:
-    Format0_Mapper(const uint8_t* gids)
-        : m_GlyphIDs(gids) {}
-
-    int get_glyph_idx(size_t c) {
-        assert(c <= 255);
-        return m_GlyphIDs[c];
-    }
-
-    private:
-    const uint8_t* m_GlyphIDs;
-};
-
 struct Parser {
     Parser(const void* pFontData);
 
     void RegisterTables();
 
-    void SelectEncoding();
+    void ChooseEncoder();
 
     Stream GetTable(const std::string& pTag) const;
 
@@ -48,7 +35,7 @@ struct Parser {
     //
 
     std::unordered_map<std::string, uint32_t> tables;
-    Format0_Mapper* mapper;
+    const BasicUnicodeEncoder* encoder;
     const uint8_t* fontData;
     uint16_t upem;
 };

@@ -8,7 +8,9 @@ int main(int argc, char* argv[])
 {
 	library lib("arial.ttf");
 
-	auto glyph = lib.LoadGlyph('@');
+	//const uint32_t charCode = 0x06E9; // This glyph crashes the renderer!
+
+	auto glyph = lib.LoadGlyph(0x034F);
 
 	auto bmp = lib.RenderGlyph(glyph, 12.0f);
 

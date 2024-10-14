@@ -7,17 +7,23 @@ class Stream {
     public:
 
     Stream(const void* stream)
-        : stream_(stream) {}
+        : stream_(stream)
+    {
+    }
 
     Stream(const Stream& stream)
-        : stream_(stream.get()) {}
+        : stream_(stream.get())
+    {
+    }
 
     //
 
+    template <typename T> static T GetField(const void* pDataPtr);
     template <typename T> T GetField();
     template <typename T> void SkipField();
 
-    void Skip(size_t pByteCount) {
+    void Skip(size_t pByteCount)
+    {
         stream_ = (uint8_t*)stream_ + pByteCount;
     }
 
@@ -25,7 +31,8 @@ class Stream {
 
     //
 
-    uint8_t operator*() { // Read one byte.
+    uint8_t operator*()
+    { // Read one byte.
         return this->GetField<uint8_t>();
     }
 
@@ -36,7 +43,8 @@ class Stream {
 // Byte-swap utility template functions.
 
 template <typename T>
-T SwapBytes16(const T* data) {
+T SwapBytes16(const T* data)
+{
     T bytes = *(const T*)data;
 
     T Val0 = (bytes & 0xff) << 8;
@@ -46,7 +54,8 @@ T SwapBytes16(const T* data) {
 }
 
 template <typename T>
-T SwapBytes32(const T* data) {
+T SwapBytes32(const T* data)
+{
     T bytes = *(const T*)data;
 
     T Val0 = (bytes & 0xff) << 24;
@@ -58,7 +67,8 @@ T SwapBytes32(const T* data) {
 }
 
 template <typename T>
-T SwapBytes64(const T* data) {
+T SwapBytes64(const T* data)
+{
     T bytes = *(const T*)data;
 
     T Val0 = (bytes & 0xff) << 56;
@@ -81,6 +91,15 @@ Stream::SkipField()
 {
     stream_ = (uint8_t*)stream_ + sizeof(T);
 }
+
+template <typename T>
+static T
+Stream::GetField(const void* pDataPtr)
+{
+    Stream s(pDataPtr);
+    return s.GetField<T>();
+}
+
 
 template <typename T>
 T Stream::GetField()

@@ -9,10 +9,10 @@
 // 
 
 Parser::Parser(const void* pFontData)
-	: fontData((const uint8_t*)pFontData), mapper(nullptr), upem(0)
+	: fontData((const uint8_t*)pFontData), encoder(nullptr), upem(0)
 {
 	RegisterTables();
-	SelectEncoding();
+	ChooseEncoder();
 	LoadGlobalMetrics();
 }
 
@@ -41,7 +41,7 @@ Parser::RegisterTables()
 }
 
 void
-Parser::SelectEncoding()
+Parser::ChooseEncoder()
 {
 	Stream cmap = GetTable("cmap");
 	const uint8_t* cmapTop = (const uint8_t*)cmap.get();
@@ -54,16 +54,17 @@ Parser::SelectEncoding()
 		const uint32_t encodingTableOffset = cmap.GetField<uint32_t>();
 
 		Stream encodingTable(cmapTop + encodingTableOffset);
-		const uint16_t encodingFormat = encodingTable.GetField<uint16_t>();
+		const void* encodingTableTop = encodingTable.get();
 
-		if (!encodingFormat) {
-			const uint8_t* glyphLookupTable = (const uint8_t*)encodingTable.get() + 4;
-			mapper = new Format0_Mapper(glyphLookupTable);
+		const uint16_t encodingFormat = encodingTable.GetField<uint16_t>();
+		if (encodingFormat == 4) {
+			encoder = new BasicUnicodeEncoder(encodingTableTop);
 			break;
 		}
+
 	}
 
-	assert(mapper);
+	assert(encoder);
 }
 
 Stream
@@ -227,7 +228,7 @@ GenerateMeshes(std::vector<Contour>& contours)
 Outline
 Parser::LoadGlyph(const size_t pCharCode)
 {
-	auto glyphID = mapper->get_glyph_idx(pCharCode);
+	const GlyphID glyphID = encoder->GetGlyphID(pCharCode);
 
 	//
 
