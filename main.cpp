@@ -10,7 +10,7 @@ int main(int argc, char* argv[])
 
 	//const uint32_t charCode = 0x06E9; // This glyph crashes the renderer!
 
-	auto glyph = lib.LoadGlyph(0x034F);
+	auto glyph = lib.LoadGlyph(0xfeb7);
 
 	auto bmp = lib.RenderGlyph(glyph, 12.0f);
 

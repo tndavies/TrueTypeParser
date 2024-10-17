@@ -6,7 +6,7 @@
 #include "parser.h"
 #include "raster.h"
 
-// 
+//
 
 Parser::Parser(const void* pFontData)
 	: fontData((const uint8_t*)pFontData), encoder(nullptr), upem(0)
@@ -16,9 +16,7 @@ Parser::Parser(const void* pFontData)
 	LoadGlobalMetrics();
 }
 
-
-void
-Parser::RegisterTables()
+void Parser::RegisterTables()
 {
 	Stream ttfFile(fontData);
 	ttfFile.Skip(4); // skip to table-count
@@ -40,8 +38,7 @@ Parser::RegisterTables()
 	}
 }
 
-void
-Parser::ChooseEncoder()
+void Parser::ChooseEncoder()
 {
 	Stream cmap = GetTable("cmap");
 	const uint8_t* cmapTop = (const uint8_t*)cmap.get();
@@ -61,7 +58,6 @@ Parser::ChooseEncoder()
 			encoder = new BasicUnicodeEncoder(encodingTableTop);
 			break;
 		}
-
 	}
 
 	assert(encoder);
@@ -73,16 +69,14 @@ Parser::GetTable(const std::string& pTag) const
 	return Stream(fontData + tables.at(pTag));
 }
 
-void
-Parser::LoadGlobalMetrics()
+void Parser::LoadGlobalMetrics()
 {
 	Stream head = GetTable("head");
 	head.Skip(18);
 	upem = head.GetField<uint16_t>();
 }
 
-void
-UnpackFlags(
+void UnpackFlags(
 	Stream& dataStream,
 	std::vector<Contour>& contours,
 	const std::vector<uint16_t>& endPoints)
@@ -106,8 +100,7 @@ UnpackFlags(
 	}
 }
 
-void
-UnpackAxis(
+void UnpackAxis(
 	Stream& dataStream,
 	std::vector<Contour>& contours,
 	const std::function<std::vector<int16_t>& (Contour&)>& selectBuffer,
@@ -225,40 +218,11 @@ GenerateMeshes(std::vector<Contour>& contours)
 	return et;
 }
 
-Outline
-Parser::LoadGlyph(const size_t pCharCode)
+const EdgeTable*
+LoadSimpleGlyph(Stream glyf, const int16_t pContourCount)
 {
-	const GlyphID glyphID = encoder->GetGlyphID(pCharCode);
-
-	//
-
-	Stream head = GetTable("head");
-	head.Skip(50); // skip to locaFormat field 
-	const bool locaLongFormat = (bool)head.GetField<int16_t>();
-
-	Stream loca = GetTable("loca");
-	const size_t bytesPerElement = locaLongFormat ? 4 : 2;
-	loca.Skip(bytesPerElement * glyphID); // jump to array element for glyph.
-	uint32_t glyphOffset = locaLongFormat ? loca.GetField<uint32_t>() : loca.GetField<uint16_t>();
-	if (!locaLongFormat) glyphOffset *= 2;
-
-	Stream glyf = GetTable("glyf");
-	glyf.Skip(glyphOffset);
-
-	// Process outline data
-
-	const int16_t contourCount = glyf.GetField<int16_t>();
-
-	assert(contourCount > 0); // We don't support compund glyphs yet.
-
-	const int16_t xMin = glyf.GetField<int16_t>();
-	const int16_t yMin = glyf.GetField<int16_t>();
-	const int16_t xMax = glyf.GetField<int16_t>();
-	const int16_t yMax = glyf.GetField<int16_t>();
-	BoundingBox bb(xMin, yMin, xMax, yMax);
-
-	std::vector<uint16_t> contourEndPts(contourCount);
-	for (size_t k = 0; k < contourCount; ++k) {
+	std::vector<uint16_t> contourEndPts(pContourCount);
+	for (size_t k = 0; k < pContourCount; ++k) {
 		contourEndPts[k] = glyf.GetField<uint16_t>();
 	}
 
@@ -271,7 +235,126 @@ Parser::LoadGlyph(const size_t pCharCode)
 	UnpackAxis(glyf, contours, YSelect, YShort, YDual);
 	const EdgeTable* et = GenerateMeshes(contours);
 
+	return et;
+}
+
+float
+InterpretF2DOT14(const u16 bits)
+{
+	// The F2DOT14 datatype represents a signed real value
+	// within 16-bits. The first 14-bits store the
+	// fractional value, and the top 2-bits store the
+	// integer value, using twos complement representation.
+	// See: https://learn.microsoft.com/en-us/typography/opentype/spec/otff
+
+	s8 integerVal = (bits & 0xC000) >> 14; // shift integer-bits to bottom.
+	if (bits & 0x8000) { // if msb is set, then value is -ve.
+		// minus one, and negate the integer-bits, yielding the +ve
+		// version of the value.
+		constexpr u8 integerBitsMask = 1 << 15;
+		const u8 absVal = ~(integerVal - 1) & integerBitsMask;
+		integerVal = -absVal; // store back as signed value.
+	}
+
+	// Compute the fractional value from the fraction-bits, using the
+	// formula (fraction-bits integer value) / 2^14.
+	const float fractionalVal = (bits & 0x3FFF) / (float)16384;
+
 	//
 
-	return Outline(et, bb);
+	return integerVal + fractionalVal;
+}
+
+void LoadCompoundGlyph(Stream glyf)
+{
+	// Component Descriptions
+	const u16 flag = glyf.GetField<u16>();
+	const u16 glyphID = glyf.GetField<u16>();
+
+	//
+
+	constexpr auto argWidthMask = 1 << 0;
+	constexpr auto argTypeMask = 1 << 1;
+	constexpr auto singleScaleMask = 1 << 3;
+	constexpr auto doubleScaleMask = 1 << 6;
+	constexpr auto transformMask = 1 << 7;
+
+	const bool isWide = flag & argWidthMask;
+	const bool isSigned = flag & argTypeMask;
+
+	if (isWide && isSigned) { // args: s16 offsets
+		const s16 arg1 = glyf.GetField<s16>();
+		const s16 arg2 = glyf.GetField<s16>();
+
+		if (flag & singleScaleMask) {
+			const float scale = InterpretF2DOT14(glyf.GetField<u16>());
+
+			const float a = scale;
+			const float b = 0.0f;
+			const float c = 0.0f;
+			const float d = scale;
+
+
+		}
+
+	}
+	else if (isWide && !isSigned) { // args: u16 point-indicies
+		const u16 arg1 = glyf.GetField<u16>();
+		const u16 arg2 = glyf.GetField<u16>();
+	}
+	else if (!isWide && isSigned) { // args: s8 offsets
+		const s8 arg1 = glyf.GetField<s8>();
+		const s8 arg2 = glyf.GetField<s8>();
+	}
+	else if (!isWide && !isSigned) { // args: u8 point-indicies
+		const u8 arg1 = glyf.GetField<u8>();
+		const u8 arg2 = glyf.GetField<u8>();
+	}
+
+}
+
+Outline
+Parser::LoadGlyph(const size_t pCharCode)
+{
+	const GlyphID glyphID = encoder->GetGlyphID(pCharCode);
+
+	//
+
+	Stream head = GetTable("head");
+	head.Skip(50); // skip to locaFormat field
+	const bool locaLongFormat = (bool)head.GetField<int16_t>();
+
+	Stream loca = GetTable("loca");
+	const size_t bytesPerElement = locaLongFormat ? 4 : 2;
+	loca.Skip(bytesPerElement * glyphID); // jump to array element for glyph.
+	uint32_t glyphOffset = locaLongFormat ? loca.GetField<uint32_t>() : loca.GetField<uint16_t>();
+	if (!locaLongFormat)
+		glyphOffset *= 2;
+
+	Stream glyf = GetTable("glyf");
+	glyf.Skip(glyphOffset);
+
+	// Interpret the outline data and generate and edge-table for rendering.
+
+	const int16_t contourCount = glyf.GetField<int16_t>();
+
+	const int16_t xMin = glyf.GetField<int16_t>();
+	const int16_t yMin = glyf.GetField<int16_t>();
+	const int16_t xMax = glyf.GetField<int16_t>();
+	const int16_t yMax = glyf.GetField<int16_t>();
+	BoundingBox bb(xMin, yMin, xMax, yMax);
+
+	Outline* outline = nullptr;
+
+	if (contourCount >= 0) {
+		const EdgeTable* et = LoadSimpleGlyph(glyf, contourCount);
+		outline = new Outline(et, bb);
+	}
+	else {
+		LoadCompoundGlyph(glyf);
+	}
+
+	//
+
+	return *outline; // @todo: avoid the copy?
 }
