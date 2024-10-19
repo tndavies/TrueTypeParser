@@ -3,12 +3,12 @@
 #include <vector>
 #include "outline.h"
 
+#define OnCurve(x) (x & 1)
+
 //
 
 struct Edge {
-    Edge(fPoint p0, fPoint p1);
-
-    void transform(const float pUpem, float pXmin, float pYmin);
+    Edge(const fPoint& p0, const fPoint& p1, const BoundingBox& pBB, const float upem);
 
     //
 
@@ -19,19 +19,36 @@ struct Edge {
     float sclx;
 };
 
-
 struct Bezier {
     fPoint p0, ctrl, p1;
 
     Bezier(fPoint p0, fPoint ctrl, fPoint p1)
-        : p0(p0), ctrl(ctrl), p1(p1) {}
+        : p0(p0), ctrl(ctrl), p1(p1)
+    {
+    }
 };
 
-struct EdgeTable {
+class EdgeTable {
+    /* === Methods === */
+public:
+    EdgeTable(const GlyphDescription& pGlyphDesc, const float pRasterUpem)
+        : m_glyphDesc(pGlyphDesc), m_upem(pRasterUpem)
+    {
+        Generate(m_glyphDesc.mesh);
+    }
+
+private:
+    void Generate(GlyphMesh& pMesh);
+    void AddEdge(const fPoint& p0, const fPoint& p1);
+    void AddBezier(const fPoint& p0, const fPoint& ctrl, const fPoint& p1);
+
+    /* === Variables === */
+public:
     std::vector<Edge> edges;
 
-    void addEdge(const fPoint& p0, const fPoint& p1);
-    void addBezier(const fPoint& p0, const fPoint& ctrl, const fPoint& p1);
+private:
+    GlyphDescription m_glyphDesc;
+    float m_upem;
 };
 
 struct RasterTarget {
@@ -47,6 +64,5 @@ struct RasterTarget {
     void* memory_;
 };
 
-const RasterTarget* RenderOutline(const Outline& pOutline, const float pUpem);
-float em2raster(const float value, const float upem);
-void em2rasterPt(fPoint& pt, const float upem);
+const RasterTarget* RenderOutline(const GlyphDescription& pGlyphDesc, const float pUpem);
+float DesignToRaster(const float value, const float upem);

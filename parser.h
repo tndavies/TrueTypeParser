@@ -10,13 +10,18 @@
 
 #define XSelect [](Contour& c) -> auto & { return c.xs; }
 #define YSelect [](Contour& c) -> auto & { return c.ys; }
-#define OnCurve(x) (x & 1)
 #define RepeatBit 3
 #define XShort 1
 #define YShort 2
 #define XDual 4
 #define YDual 5
 
+#define argWidthMask 	 (1 << 0)
+#define argTypeMask 	 (1 << 1)
+#define singleScaleMask  (1 << 3)
+#define doubleScaleMask  (1 << 6)
+#define transformMask 	 (1 << 7)
+#define nextCompMask     (1 << 5)
 //
 
 struct Parser {
@@ -30,7 +35,10 @@ struct Parser {
 
     void LoadGlobalMetrics();
 
-    Outline LoadGlyph(const size_t pCharCode);
+    GlyphDescription LoadGlyph(const GlyphID pGlyphID);
+
+    const GlyphMesh LoadCompoundGlyph(Stream pData); // @todo: private
+    const GlyphMesh LoadSimpleGlyph(Stream glyf, const int16_t pContourCount); // @todo: private
 
     //
 

@@ -11,9 +11,9 @@
 struct library {
     library(const std::string& pFontFilePath);
 
-    Outline LoadGlyph(const size_t pCharCode);
+    GlyphDescription LoadGlyph(const size_t pCharCode);
 
-    const RasterTarget* RenderGlyph(const Outline& pOutline, const float pPointSize);
+    const RasterTarget* RenderGlyph(const GlyphDescription& pGlyphDesc, const float pPointSize);
 
     //
 

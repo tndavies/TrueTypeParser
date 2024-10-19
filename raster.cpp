@@ -7,8 +7,12 @@
 
 //
 
-Edge::Edge(fPoint p0, fPoint p1)
-	: is_active(false), m(0), c(0), sclx(0)
+Edge::Edge(
+	const fPoint& p0,
+	const fPoint& p1,
+	const BoundingBox& pBB,
+	const float upem
+) : is_active(false), m(0), c(0), sclx(0)
 {
 	// classify the points into min & max.
 	if (p0.y > p1.y) {
@@ -27,23 +31,20 @@ Edge::Edge(fPoint p0, fPoint p1)
 	}
 
 	is_vertical = (apex.x == base.x);
-}
 
-void
-Edge::transform(const float upem, float xmin, float ymin)
-{
-	// translate the outline into the 1st quadrant.
-	apex.x -= xmin;
-	base.x -= xmin;
+	// Translate the outline into the 1st quadrant.
+	apex.x -= pBB.xMin;
+	base.x -= pBB.xMin;
+	apex.y -= pBB.yMin;
+	base.y -= pBB.yMin;
 
-	apex.y -= ymin;
-	base.y -= ymin;
+	// Scale points into bitmap space.
+	apex.x = DesignToRaster(apex.x, upem);
+	apex.y = DesignToRaster(apex.y, upem);
+	base.x = DesignToRaster(base.x, upem);
+	base.y = DesignToRaster(base.y, upem);
 
-	// scale points into bitmap space.
-	em2rasterPt(apex, upem);
-	em2rasterPt(base, upem);
-
-	// calculate gradient & intercept (for non-vertical edges).
+	// Calculate gradient & intercept (for non-vertical edges).
 	if (!is_vertical) {
 		m = (apex.y - base.y) / (apex.x - base.x);
 		c = base.y - m * base.x;
@@ -53,13 +54,13 @@ Edge::transform(const float upem, float xmin, float ymin)
 //
 
 void
-EdgeTable::addEdge(const fPoint& p0, const fPoint& p1)
+EdgeTable::AddEdge(const fPoint& p0, const fPoint& p1)
 {
-	edges.emplace_back(p0, p1);
+	edges.emplace_back(p0, p1, m_glyphDesc.bb, m_upem);
 }
 
 void
-EdgeTable::addBezier(const fPoint& p0, const fPoint& ctrl, const fPoint& p1)
+EdgeTable::AddBezier(const fPoint& p0, const fPoint& ctrl, const fPoint& p1)
 {
 	const float kTolerance = 1.0f; // @todo: what value makes sense for this?
 
@@ -85,7 +86,7 @@ EdgeTable::addBezier(const fPoint& p0, const fPoint& ctrl, const fPoint& p1)
 
 		// 
 		if (dist <= kTolerance) {
-			edges.emplace_back(curr.p0, curr.p1);
+			AddEdge(curr.p0, curr.p1);
 			continue;
 		}
 
@@ -107,31 +108,9 @@ EdgeTable::addBezier(const fPoint& p0, const fPoint& ctrl, const fPoint& p1)
 	}
 }
 
-//
-
-RasterTarget::RasterTarget(const size_t width, const size_t height)
-	: width(width), height(height), memory_(nullptr)
-{
-	const auto imgSize = width * height;
-	memory_ = std::malloc(imgSize);
-	assert(memory_);
-	std::memset(memory_, 0, imgSize);
-}
-
-void
-RasterTarget::store(const size_t x, const size_t y, const uint8_t colour) {
-	((char*)memory_)[x + y * width] = colour;
-}
-
-uint8_t
-RasterTarget::fetch(const size_t x, const size_t y) const {
-	return ((uint8_t*)memory_)[y * width + x];
-}
-
-//
-
 float
-em2raster(const float value, const float upem) {
+DesignToRaster(const float value, const float upem)
+{
 	const float pts = 12.0f;
 	const float dpi = 96.0f;
 
@@ -139,41 +118,100 @@ em2raster(const float value, const float upem) {
 }
 
 void
-em2rasterPt(fPoint& pt, const float upem) {
-	const float pts = 12.0f;
-	const float dpi = 96.0f;
+EdgeTable::Generate(GlyphMesh& pMesh)
+{
+	for (auto& c : pMesh.contours) {
+		auto& flags = c.flags;
+		auto& xs = c.xs;
+		auto& ys = c.ys;
 
-	pt.x = em2raster(pt.x, upem);
-	pt.y = em2raster(pt.y, upem);
+		assert(OnCurve(flags[0])); // Assume the 1st contour point is on-curve.
+
+		// Create any inferred points.
+		for (size_t i = 0; i < flags.size() - 1; ++i) {
+			if (!OnCurve(flags[i]) && !OnCurve(flags[i + 1])) {
+				const float x = (xs.at(i) + xs.at(i + 1)) / 2.0f;
+				const float y = (ys.at(i) + ys.at(i + 1)) / 2.0f;
+
+				flags.insert(flags.begin() + i + 1, 0xff);
+				xs.insert(xs.begin() + i + 1, x);
+				ys.insert(ys.begin() + i + 1, y);
+			}
+		}
+
+		const auto& pointCount = flags.size();
+		std::vector<size_t> buff;
+
+		//
+		for (size_t k = 0; k <= pointCount; ++k) {
+			const auto idx = k % pointCount; // point index into the data buffers.
+			buff.push_back(idx);
+
+			switch (buff.size()) {
+				case 2:
+				{
+					const auto& slt0 = buff[0];
+					const auto& slt1 = buff[1];
+
+					if (OnCurve(flags[slt0]) && OnCurve(flags[slt1])) {
+						const fPoint p0(xs.at(slt0), ys.at(slt0));
+						const fPoint p1(xs.at(slt1), ys.at(slt1));
+
+						if (p0.y != p1.y) { // filter out horizontal edges
+							AddEdge(p0, p1);
+						}
+
+						buff[0] = buff[1];
+						buff.pop_back();
+					}
+				}
+				break;
+
+				case 3:
+				{
+					const auto& slt0 = buff[0];
+					const auto& slt1 = buff[1];
+					const auto& slt2 = buff[2];
+
+					if (OnCurve(flags[slt0]) && !OnCurve(flags[slt1]) && OnCurve(flags[slt2])) {
+						const fPoint p0(xs.at(slt0), ys.at(slt0));
+						const fPoint p1(xs.at(slt1), ys.at(slt1));
+						const fPoint p2(xs.at(slt2), ys.at(slt2));
+
+						AddBezier(p0, p1, p2);
+
+						buff[0] = buff[2];
+						buff.pop_back();
+						buff.pop_back();
+					}
+				}
+				break;
+			}
+		}
+	}
 }
 
 //
 
 const RasterTarget*
-RenderOutline(const Outline& ot, const float upem)
+RenderOutline(const GlyphDescription& pGlyphDesc, const float upem)
 {
-	// Transform all edges in the edge-table into raster space.
-	auto raster_table = *ot.et;
-
-	for (auto& e : raster_table.edges) {
-		e.transform(upem, ot.bb.xMin, ot.bb.yMin);
-	}
+	EdgeTable et(pGlyphDesc, upem);
 
 	// Allocate bitmap memory.
-	const auto xExtent = em2raster(ot.bb.xMax - ot.bb.xMin, upem);
-	const auto yExtent = em2raster(ot.bb.yMax - ot.bb.yMin, upem);
-
+	const auto xExtent = DesignToRaster(pGlyphDesc.bb.xMax - pGlyphDesc.bb.xMin, upem);
+	const auto yExtent = DesignToRaster(pGlyphDesc.bb.yMax - pGlyphDesc.bb.yMin, upem);
 	const size_t img_width = std::ceil(xExtent);
 	const size_t img_height = std::ceil(yExtent);
+
 	RasterTarget* target = new RasterTarget(img_width, img_height);
 
 	// Rasterise outline.
 	const float kScanlineDelta = 1.0f;
-
 	for (float scanline = 0.5f; scanline < target->height; scanline += kScanlineDelta) {
 		std::vector<float> crossings; // @perf: set capacity to avoid allocs?
 
-		for (auto& e : raster_table.edges) {
+		for (auto& e : et.edges) {
 			if (e.is_active) {
 				if (e.apex.y <= scanline) {
 					// edge shouldn't be active anymore.
@@ -217,3 +255,28 @@ RenderOutline(const Outline& ot, const float upem)
 
 	return target;
 }
+
+//
+
+RasterTarget::RasterTarget(const size_t width, const size_t height)
+	: width(width), height(height), memory_(nullptr)
+{
+	const auto imgSize = width * height;
+	memory_ = std::malloc(imgSize);
+	assert(memory_);
+	std::memset(memory_, 0, imgSize);
+}
+
+void
+RasterTarget::store(const size_t x, const size_t y, const uint8_t colour)
+{
+	((char*)memory_)[x + y * width] = colour;
+}
+
+uint8_t
+RasterTarget::fetch(const size_t x, const size_t y) const
+{
+	return ((uint8_t*)memory_)[y * width + x];
+}
+
+//

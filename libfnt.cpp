@@ -24,12 +24,13 @@ library::library(const std::string& pFontPath)
 	parser = new Parser(font);
 }
 
-Outline library::LoadGlyph(const size_t pCharCode)
+GlyphDescription library::LoadGlyph(const size_t pCharCode)
 {
-	return parser->LoadGlyph(pCharCode);
+	const GlyphID glyphID = parser->encoder->GetGlyphID(pCharCode);
+	return parser->LoadGlyph(glyphID);
 }
 
-const RasterTarget* library::RenderGlyph(const Outline& pOutline, const float pPointSize)
+const RasterTarget* library::RenderGlyph(const GlyphDescription& pGlyphDesc, const float pPointSize)
 {
-	return RenderOutline(pOutline, parser->upem);
+	return RenderOutline(pGlyphDesc, parser->upem);
 }

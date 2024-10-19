@@ -140,104 +140,6 @@ void UnpackAxis(
 	}
 }
 
-EdgeTable*
-GenerateMeshes(std::vector<Contour>& contours)
-{
-	EdgeTable* et = new EdgeTable();
-
-	for (auto& c : contours) {
-		auto& flags = c.flags;
-		auto& xs = c.xs;
-		auto& ys = c.ys;
-
-		assert(OnCurve(flags[0])); // Assume the 1st contour point is on-curve.
-
-		// Create any inferred points.
-		for (size_t i = 0; i < flags.size() - 1; ++i) {
-			if (!OnCurve(flags[i]) && !OnCurve(flags[i + 1])) {
-				const float x = (xs.at(i) + xs.at(i + 1)) / 2.0f;
-				const float y = (ys.at(i) + ys.at(i + 1)) / 2.0f;
-
-				flags.insert(flags.begin() + i + 1, 0xff);
-				xs.insert(xs.begin() + i + 1, x);
-				ys.insert(ys.begin() + i + 1, y);
-			}
-		}
-
-		const auto& ptCount = flags.size();
-		std::vector<size_t> buff;
-
-		//
-		for (size_t k = 0; k <= ptCount; ++k) {
-			const auto idx = k % ptCount; // point index into the data buffers.
-			buff.push_back(idx);
-
-			switch (buff.size()) {
-				case 2:
-				{
-					const auto& slt0 = buff[0];
-					const auto& slt1 = buff[1];
-
-					if (OnCurve(flags[slt0]) && OnCurve(flags[slt1])) {
-						const fPoint p0(xs.at(slt0), ys.at(slt0));
-						const fPoint p1(xs.at(slt1), ys.at(slt1));
-
-						if (p0.y != p1.y) { // skip horizontal edges
-							et->addEdge(p0, p1);
-						}
-
-						buff[0] = buff[1];
-						buff.pop_back();
-					}
-				}
-				break;
-
-				case 3:
-				{
-					const auto& slt0 = buff[0];
-					const auto& slt1 = buff[1];
-					const auto& slt2 = buff[2];
-
-					if (OnCurve(flags[slt0]) && !OnCurve(flags[slt1]) && OnCurve(flags[slt2])) {
-						const fPoint p0(xs.at(slt0), ys.at(slt0));
-						const fPoint p1(xs.at(slt1), ys.at(slt1));
-						const fPoint p2(xs.at(slt2), ys.at(slt2));
-
-						et->addBezier(p0, p1, p2);
-
-						buff[0] = buff[2];
-						buff.pop_back();
-						buff.pop_back();
-					}
-				}
-				break;
-			}
-		}
-	}
-
-	return et;
-}
-
-const EdgeTable*
-LoadSimpleGlyph(Stream glyf, const int16_t pContourCount)
-{
-	std::vector<uint16_t> contourEndPts(pContourCount);
-	for (size_t k = 0; k < pContourCount; ++k) {
-		contourEndPts[k] = glyf.GetField<uint16_t>();
-	}
-
-	const uint16_t instructionCount = glyf.GetField<uint16_t>();
-	glyf.Skip(instructionCount);
-
-	std::vector<Contour> contours;
-	UnpackFlags(glyf, contours, contourEndPts);
-	UnpackAxis(glyf, contours, XSelect, XShort, XDual);
-	UnpackAxis(glyf, contours, YSelect, YShort, YDual);
-	const EdgeTable* et = GenerateMeshes(contours);
-
-	return et;
-}
-
 float
 InterpretF2DOT14(const u16 bits)
 {
@@ -265,76 +167,136 @@ InterpretF2DOT14(const u16 bits)
 	return integerVal + fractionalVal;
 }
 
-void LoadCompoundGlyph(Stream glyf)
+const GlyphMesh
+Parser::LoadSimpleGlyph(Stream glyf, const int16_t pContourCount)
 {
-	// Component Descriptions
-	const u16 flag = glyf.GetField<u16>();
-	const u16 glyphID = glyf.GetField<u16>();
-
-	//
-
-	constexpr auto argWidthMask = 1 << 0;
-	constexpr auto argTypeMask = 1 << 1;
-	constexpr auto singleScaleMask = 1 << 3;
-	constexpr auto doubleScaleMask = 1 << 6;
-	constexpr auto transformMask = 1 << 7;
-
-	const bool isWide = flag & argWidthMask;
-	const bool isSigned = flag & argTypeMask;
-
-	if (isWide && isSigned) { // args: s16 offsets
-		const s16 arg1 = glyf.GetField<s16>();
-		const s16 arg2 = glyf.GetField<s16>();
-
-		if (flag & singleScaleMask) {
-			const float scale = InterpretF2DOT14(glyf.GetField<u16>());
-
-			const float a = scale;
-			const float b = 0.0f;
-			const float c = 0.0f;
-			const float d = scale;
-
-
-		}
-
-	}
-	else if (isWide && !isSigned) { // args: u16 point-indicies
-		const u16 arg1 = glyf.GetField<u16>();
-		const u16 arg2 = glyf.GetField<u16>();
-	}
-	else if (!isWide && isSigned) { // args: s8 offsets
-		const s8 arg1 = glyf.GetField<s8>();
-		const s8 arg2 = glyf.GetField<s8>();
-	}
-	else if (!isWide && !isSigned) { // args: u8 point-indicies
-		const u8 arg1 = glyf.GetField<u8>();
-		const u8 arg2 = glyf.GetField<u8>();
+	std::vector<uint16_t> contourEndPts(pContourCount);
+	for (size_t k = 0; k < pContourCount; ++k) {
+		contourEndPts[k] = glyf.GetField<uint16_t>();
 	}
 
+	const uint16_t instructionCount = glyf.GetField<uint16_t>();
+	glyf.Skip(instructionCount);
+
+	std::vector<Contour> contours;
+	UnpackFlags(glyf, contours, contourEndPts);
+	UnpackAxis(glyf, contours, XSelect, XShort, XDual);
+	UnpackAxis(glyf, contours, YSelect, YShort, YDual);
+
+	return GlyphMesh(contours); // @todo: avoid copy of contour data into GlyphMesh struct?
 }
 
-Outline
-Parser::LoadGlyph(const size_t pCharCode)
+void
+PlaceComponentGlyph(
+	const s16 pDeltaX,
+	const s16 pDeltaY,
+	GlyphDescription& pCompGlyph)
 {
-	const GlyphID glyphID = encoder->GetGlyphID(pCharCode);
+	if (!pDeltaX && !pDeltaY) { // no offset needed.
+		return;
+	}
 
-	//
+	// Loop over each contour in the mesh, and apply
+	// the delta offset to each of the points.
+	for (auto& c : pCompGlyph.mesh.contours) {
+		for (size_t k = 0; k < c.getTotalPtCount(); ++k) {
+			s16& ptX = c.xs[k];
+			s16& ptY = c.ys[k];
 
+			ptX += pDeltaX;
+			ptY += pDeltaY;
+		}
+	}
+}
+
+const GlyphMesh
+Parser::LoadCompoundGlyph(Stream pData)
+{
+	GlyphMesh compoundMesh;
+
+	bool hasNextComponent = true;
+	while (hasNextComponent) {
+		const u16 flags = pData.GetField<u16>();
+		const u16 componentGlyphID = pData.GetField<u16>();
+		GlyphDescription componentGlyph = LoadGlyph(componentGlyphID); // @todo: use maxp table to avoid stack recursion. 
+
+		// Load arguments 1 and 2.
+		const bool isWide = flags & argWidthMask;
+		const bool isSigned = flags & argTypeMask;
+
+		// deltas ...
+		if (isWide && isSigned) {
+			const s16 xDelta = pData.GetField<s16>();
+			const s16 yDelta = pData.GetField<s16>();
+			PlaceComponentGlyph(xDelta, yDelta, componentGlyph);
+		}
+		else if (!isWide && isSigned) {
+			const s8 xDelta = pData.GetField<s8>();
+			const s8 yDelta = pData.GetField<s8>();
+			PlaceComponentGlyph(xDelta, yDelta, componentGlyph);
+		}
+		// alignments ... 
+		else if (isWide && !isSigned) {
+			const u16 arg1 = pData.GetField<u16>();
+			const u16 arg2 = pData.GetField<u16>();
+		}
+		else if (!isWide && !isSigned) {
+			const u8 arg1 = pData.GetField<u8>();
+			const u8 arg2 = pData.GetField<u8>();
+		}
+
+		// 
+		// 1) Load offset values.
+		// 2) Load transformation.
+		// 3) Transform offsets & child control points.
+		// 4) AddMesh 
+
+		// Load the transform matrix.
+		float transform[4] = { 1.0f, 0.0f, 0.0f, 1.0f };
+		if (flags & singleScaleMask) {
+			const float scale = InterpretF2DOT14(pData.GetField<u16>());
+			transform[0] = scale;
+			transform[3] = scale;
+		}
+		else if (flags & doubleScaleMask) {
+			transform[0] = InterpretF2DOT14(pData.GetField<u16>());
+			transform[3] = InterpretF2DOT14(pData.GetField<u16>());
+		}
+		else if (flags & transformMask) {
+			transform[0] = InterpretF2DOT14(pData.GetField<u16>());
+			transform[1] = InterpretF2DOT14(pData.GetField<u16>());
+			transform[2] = InterpretF2DOT14(pData.GetField<u16>());
+			transform[3] = InterpretF2DOT14(pData.GetField<u16>());
+		}
+
+		compoundMesh.AddMesh(componentGlyph.mesh);
+
+		//
+		hasNextComponent = flags & nextCompMask;
+	}
+
+	return compoundMesh;
+}
+
+GlyphDescription
+Parser::LoadGlyph(const GlyphID pGlyphID)
+{
 	Stream head = GetTable("head");
 	head.Skip(50); // skip to locaFormat field
 	const bool locaLongFormat = (bool)head.GetField<int16_t>();
 
 	Stream loca = GetTable("loca");
 	const size_t bytesPerElement = locaLongFormat ? 4 : 2;
-	loca.Skip(bytesPerElement * glyphID); // jump to array element for glyph.
+	loca.Skip(bytesPerElement * pGlyphID); // jump to array element for glyph.
 	uint32_t glyphOffset = locaLongFormat ? loca.GetField<uint32_t>() : loca.GetField<uint16_t>();
-	if (!locaLongFormat)
+	if (!locaLongFormat) {
 		glyphOffset *= 2;
+	}
 
 	Stream glyf = GetTable("glyf");
 	glyf.Skip(glyphOffset);
 
-	// Interpret the outline data and generate and edge-table for rendering.
+	//
 
 	const int16_t contourCount = glyf.GetField<int16_t>();
 
@@ -344,17 +306,10 @@ Parser::LoadGlyph(const size_t pCharCode)
 	const int16_t yMax = glyf.GetField<int16_t>();
 	BoundingBox bb(xMin, yMin, xMax, yMax);
 
-	Outline* outline = nullptr;
-
-	if (contourCount >= 0) {
-		const EdgeTable* et = LoadSimpleGlyph(glyf, contourCount);
-		outline = new Outline(et, bb);
-	}
-	else {
-		LoadCompoundGlyph(glyf);
-	}
+	const GlyphMesh mesh = (contourCount < 0) ? LoadCompoundGlyph(glyf)
+		: LoadSimpleGlyph(glyf, contourCount);
 
 	//
 
-	return *outline; // @todo: avoid the copy?
+	return GlyphDescription(mesh, bb);
 }
