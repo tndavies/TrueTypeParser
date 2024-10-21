@@ -22,16 +22,18 @@
 #define doubleScaleMask  (1 << 6)
 #define transformMask 	 (1 << 7)
 #define nextCompMask     (1 << 5)
+#define SCALED_COMPONENT_OFFSET (1<<11)
+#define UNSCALED_COMPONENT_OFFSET (1<<12)
 //
 
 struct Parser {
-    Parser(const void* pFontData);
+    Parser(const void *pFontData);
 
     void RegisterTables();
 
     void ChooseEncoder();
 
-    Stream GetTable(const std::string& pTag) const;
+    Stream GetTable(const std::string &pTag) const;
 
     void LoadGlobalMetrics();
 
@@ -43,7 +45,7 @@ struct Parser {
     //
 
     std::unordered_map<std::string, uint32_t> tables;
-    const BasicUnicodeEncoder* encoder;
-    const uint8_t* fontData;
+    const BasicUnicodeEncoder *encoder;
+    const uint8_t *fontData;
     uint16_t upem;
 };

@@ -4,7 +4,7 @@
 
 //
 
-BasicUnicodeEncoder::BasicUnicodeEncoder(const void* pEncodingTable)
+BasicUnicodeEncoder::BasicUnicodeEncoder(const void *pEncodingTable)
     : stream_(pEncodingTable)
 {
     const u16 encodingFormat = stream_.GetField<u16>();
@@ -17,10 +17,10 @@ BasicUnicodeEncoder::BasicUnicodeEncoder(const void* pEncodingTable)
     stream_.Skip(6); // Skip endCode array.
 
     // Locate the arrays that define the segments' properties.
-    Stream& endCodes = stream_;
-    Stream startCodes = (u16*)endCodes.get() + segmentCount + 1;
-    Stream idDeltas = (u16*)startCodes.get() + segmentCount;
-    const u16* idRangeOffsets = (const u16*)idDeltas.get() + segmentCount;
+    Stream &endCodes = stream_;
+    Stream startCodes = (u16 *)endCodes.get() + segmentCount + 1;
+    Stream idDeltas = (u16 *)startCodes.get() + segmentCount;
+    const u16 *idRangeOffsets = (const u16 *)idDeltas.get() + segmentCount;
 
     for (size_t k = 0; k < segmentCount; ++k) {
         segments_.emplace_back(startCodes.GetField<u16>(), endCodes.GetField<u16>(),
@@ -38,9 +38,9 @@ GlyphID
 BasicUnicodeEncoder::GetGlyphID(const CharCode pCharCode) const
 {
     // Determine which segment the char-code lies within.
-    const Segment* segment = nullptr;
+    const Segment *segment = nullptr;
     for (size_t k = 0; k < segments_.size(); ++k) {
-        const Segment* seg = &segments_[k];
+        const Segment *seg = &segments_[k];
 
         if (pCharCode >= seg->startCharCode && pCharCode <= seg->endCharCode) {
             segment = seg;
@@ -56,7 +56,7 @@ BasicUnicodeEncoder::GetGlyphID(const CharCode pCharCode) const
 
     const u16 idRangeOffset = Stream::GetField<u16>(segment->idRangeOffsetPtr);
     if (idRangeOffset) {
-        const u8* glyphIdPtr = (const u8*)segment->idRangeOffsetPtr + (idRangeOffset + 2 * (pCharCode - segment->startCharCode));
+        const u8 *glyphIdPtr = (const u8 *)segment->idRangeOffsetPtr + (idRangeOffset + 2 * (pCharCode - segment->startCharCode));
         glyphID = Stream::GetField<u16>(glyphIdPtr);
     }
     else {

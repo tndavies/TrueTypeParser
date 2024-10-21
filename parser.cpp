@@ -8,8 +8,8 @@
 
 //
 
-Parser::Parser(const void* pFontData)
-	: fontData((const uint8_t*)pFontData), encoder(nullptr), upem(0)
+Parser::Parser(const void *pFontData)
+	: fontData((const uint8_t *)pFontData), encoder(nullptr), upem(0)
 {
 	RegisterTables();
 	ChooseEncoder();
@@ -41,7 +41,7 @@ void Parser::RegisterTables()
 void Parser::ChooseEncoder()
 {
 	Stream cmap = GetTable("cmap");
-	const uint8_t* cmapTop = (const uint8_t*)cmap.get();
+	const uint8_t *cmapTop = (const uint8_t *)cmap.get();
 
 	cmap.SkipField<uint16_t>(); // skip version number
 	const uint16_t encodingCount = cmap.GetField<uint16_t>();
@@ -51,7 +51,7 @@ void Parser::ChooseEncoder()
 		const uint32_t encodingTableOffset = cmap.GetField<uint32_t>();
 
 		Stream encodingTable(cmapTop + encodingTableOffset);
-		const void* encodingTableTop = encodingTable.get();
+		const void *encodingTableTop = encodingTable.get();
 
 		const uint16_t encodingFormat = encodingTable.GetField<uint16_t>();
 		if (encodingFormat == 4) {
@@ -64,7 +64,7 @@ void Parser::ChooseEncoder()
 }
 
 Stream
-Parser::GetTable(const std::string& pTag) const
+Parser::GetTable(const std::string &pTag) const
 {
 	return Stream(fontData + tables.at(pTag));
 }
@@ -77,16 +77,16 @@ void Parser::LoadGlobalMetrics()
 }
 
 void UnpackFlags(
-	Stream& dataStream,
-	std::vector<Contour>& contours,
-	const std::vector<uint16_t>& endPoints)
+	Stream &dataStream,
+	std::vector<Contour> &contours,
+	const std::vector<uint16_t> &endPoints)
 {
 	constexpr auto kRepeatMask = (1 << RepeatBit);
 
 	size_t prevTotalPts = 0;
-	for (const auto& idx : endPoints) {
+	for (const auto &idx : endPoints) {
 		contours.emplace_back();
-		auto& flags = contours.back().flags;
+		auto &flags = contours.back().flags;
 
 		const auto contourPtCount = (idx + 1) - prevTotalPts;
 
@@ -101,9 +101,9 @@ void UnpackFlags(
 }
 
 void UnpackAxis(
-	Stream& dataStream,
-	std::vector<Contour>& contours,
-	const std::function<std::vector<int16_t>& (Contour&)>& selectBuffer,
+	Stream &dataStream,
+	std::vector<Contour> &contours,
+	const std::function<std::vector<int16_t> &(Contour &)> &selectBuffer,
 	const size_t kShortBit,
 	const size_t kDualBit)
 {
@@ -111,11 +111,11 @@ void UnpackAxis(
 	const auto kDualMask = (1 << kDualBit);
 
 	size_t refVal = 0;
-	for (auto& c : contours) {
-		auto& buff = selectBuffer(c);
+	for (auto &c : contours) {
+		auto &buff = selectBuffer(c);
 		buff.emplace_back(refVal);
 
-		for (const auto& flg : c.flags) {
+		for (const auto &flg : c.flags) {
 			const bool dual_bit = flg & kDualMask;
 
 			if (flg & kShortMask) {
@@ -186,90 +186,87 @@ Parser::LoadSimpleGlyph(Stream glyf, const int16_t pContourCount)
 	return GlyphMesh(contours); // @todo: avoid copy of contour data into GlyphMesh struct?
 }
 
-void
-PlaceComponentGlyph(
-	const s16 pDeltaX,
-	const s16 pDeltaY,
-	GlyphDescription& pCompGlyph)
-{
-	if (!pDeltaX && !pDeltaY) { // no offset needed.
-		return;
-	}
-
-	// Loop over each contour in the mesh, and apply
-	// the delta offset to each of the points.
-	for (auto& c : pCompGlyph.mesh.contours) {
-		for (size_t k = 0; k < c.getTotalPtCount(); ++k) {
-			s16& ptX = c.xs[k];
-			s16& ptY = c.ys[k];
-
-			ptX += pDeltaX;
-			ptY += pDeltaY;
-		}
-	}
-}
-
 const GlyphMesh
 Parser::LoadCompoundGlyph(Stream pData)
 {
+	// @todo: "In a variable font, the offset vector can be modified by deltas in the 'gvar' table; 
+	// see Point numbers and processing for composite glyphs in the 'gvar' chapter for details."
+
 	GlyphMesh compoundMesh;
 
 	bool hasNextComponent = true;
 	while (hasNextComponent) {
 		const u16 flags = pData.GetField<u16>();
 		const u16 componentGlyphID = pData.GetField<u16>();
-		GlyphDescription componentGlyph = LoadGlyph(componentGlyphID); // @todo: use maxp table to avoid stack recursion. 
+		GlyphDescription subGlyph = LoadGlyph(componentGlyphID); // @todo: use maxp table to avoid stack recursion. 
 
 		// Load arguments 1 and 2.
 		const bool isWide = flags & argWidthMask;
 		const bool isSigned = flags & argTypeMask;
 
-		// deltas ...
+		// Load the transform components.
+		float a = 1.0f; // a-d (transform matrix).
+		float b = 0.0f;
+		float c = 0.0f;
+		float d = 1.0f;
+		float e = 0.0f; // e-f (translation)
+		float f = 0.0f;
+
+		// offsets ...
 		if (isWide && isSigned) {
-			const s16 xDelta = pData.GetField<s16>();
-			const s16 yDelta = pData.GetField<s16>();
-			PlaceComponentGlyph(xDelta, yDelta, componentGlyph);
+			e = pData.GetField<s16>();	// x-delta
+			f = pData.GetField<s16>();	// y-delta
 		}
 		else if (!isWide && isSigned) {
-			const s8 xDelta = pData.GetField<s8>();
-			const s8 yDelta = pData.GetField<s8>();
-			PlaceComponentGlyph(xDelta, yDelta, componentGlyph);
+			e = pData.GetField<s8>();	// x-delta
+			f = pData.GetField<s8>();	// y-delta
 		}
-		// alignments ... 
-		else if (isWide && !isSigned) {
-			const u16 arg1 = pData.GetField<u16>();
-			const u16 arg2 = pData.GetField<u16>();
+		else { // point-aligments.
+			assert(0);
 		}
-		else if (!isWide && !isSigned) {
-			const u8 arg1 = pData.GetField<u8>();
-			const u8 arg2 = pData.GetField<u8>();
+
+		if (flags & singleScaleMask) {
+			const float scale = InterpretF2DOT14(pData.GetField<u16>());
+			a = scale;
+			d = scale;
+		}
+		else if (flags & doubleScaleMask) {
+			a = InterpretF2DOT14(pData.GetField<u16>());
+			d = InterpretF2DOT14(pData.GetField<u16>());
+		}
+		else if (flags & transformMask) {
+			a = InterpretF2DOT14(pData.GetField<u16>());
+			b = InterpretF2DOT14(pData.GetField<u16>());
+			c = InterpretF2DOT14(pData.GetField<u16>());
+			d = InterpretF2DOT14(pData.GetField<u16>());
+		}
+
+		// if instructed, scale the subglyph's offsets by the transform.
+		float m = 1.0f, n = 1.0f;
+		if (!(flags & UNSCALED_COMPONENT_OFFSET)) {
+			m = std::max(std::abs(a), std::abs(b));
+			n = std::max(std::abs(c), std::abs(d));
+
+			constexpr float threshold = 33 / (float)65536;
+			if ((std::abs(std::abs(a) - std::abs(c)) <= threshold)) {
+				m *= 2;
+			}
+			if ((std::abs(std::abs(b) - std::abs(d)) <= threshold)) {
+				n *= 2;
+			}
+		}
+
+		// Transform the child's control points. 
+		for (auto &con : subGlyph.mesh.contours) {
+			for (size_t k = 0; k < con.getTotalPtCount(); ++k) {
+				s16 x = con.xs[k], y = con.ys[k];
+				con.xs[k] = (s16)std::roundf(a*x + c*y + m*e);
+				con.ys[k] = (s16)std::roundf(b*x + d*y + n*f);
+			}
 		}
 
 		// 
-		// 1) Load offset values.
-		// 2) Load transformation.
-		// 3) Transform offsets & child control points.
-		// 4) AddMesh 
-
-		// Load the transform matrix.
-		float transform[4] = { 1.0f, 0.0f, 0.0f, 1.0f };
-		if (flags & singleScaleMask) {
-			const float scale = InterpretF2DOT14(pData.GetField<u16>());
-			transform[0] = scale;
-			transform[3] = scale;
-		}
-		else if (flags & doubleScaleMask) {
-			transform[0] = InterpretF2DOT14(pData.GetField<u16>());
-			transform[3] = InterpretF2DOT14(pData.GetField<u16>());
-		}
-		else if (flags & transformMask) {
-			transform[0] = InterpretF2DOT14(pData.GetField<u16>());
-			transform[1] = InterpretF2DOT14(pData.GetField<u16>());
-			transform[2] = InterpretF2DOT14(pData.GetField<u16>());
-			transform[3] = InterpretF2DOT14(pData.GetField<u16>());
-		}
-
-		compoundMesh.AddMesh(componentGlyph.mesh);
+		compoundMesh.AddMesh(subGlyph.mesh);
 
 		//
 		hasNextComponent = flags & nextCompMask;
