@@ -60,7 +60,8 @@ void Parser::ChooseEncoder()
 		}
 	}
 
-	assert(encoder);
+	if (!encoder) { // @err: failed to find a supported encoding scheme.
+	}
 }
 
 Stream
@@ -222,6 +223,7 @@ Parser::LoadCompoundGlyph(Stream pData)
 			f = pData.GetField<s8>();	// y-delta
 		}
 		else { // point-aligments.
+			// @err: We don't support alignments!
 			assert(0);
 		}
 
@@ -241,19 +243,15 @@ Parser::LoadCompoundGlyph(Stream pData)
 			d = InterpretF2DOT14(pData.GetField<u16>());
 		}
 
-		// if instructed, scale the subglyph's offsets by the transform.
-		float m = 1.0f, n = 1.0f;
-		if (!(flags & UNSCALED_COMPONENT_OFFSET)) {
-			m = std::max(std::abs(a), std::abs(b));
-			n = std::max(std::abs(c), std::abs(d));
-
-			constexpr float threshold = 33 / (float)65536;
-			if ((std::abs(std::abs(a) - std::abs(c)) <= threshold)) {
-				m *= 2;
-			}
-			if ((std::abs(std::abs(b) - std::abs(d)) <= threshold)) {
-				n *= 2;
-			}
+		// scale the subglyph's offsets by the transform.
+		float m = std::max(std::abs(a), std::abs(b));
+		float n = std::max(std::abs(c), std::abs(d));
+		constexpr float threshold = 33 / (float)65536;
+		if ((std::abs(std::abs(a) - std::abs(c)) <= threshold)) {
+			m *= 2;
+		}
+		if ((std::abs(std::abs(b) - std::abs(d)) <= threshold)) {
+			n *= 2;
 		}
 
 		// Transform the child's control points. 
